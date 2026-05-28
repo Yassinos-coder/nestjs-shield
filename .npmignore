@@ -1,0 +1,11 @@
+src
+example
+tsconfig*.json
+.gitignore
+.editorconfig
+.eslintrc*
+.prettierrc*
+*.log
+node_modules
+coverage
+.github
