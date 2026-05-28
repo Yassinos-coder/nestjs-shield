@@ -17,10 +17,24 @@ No geo-fencing in v1. No dependency on `@nestjs/throttler` — the engine is sta
 
 ## Install
 
+From the public npm registry:
+
 ```bash
 npm install nestjs-shield
 # optional, only if you use Redis storage
 npm install ioredis
+```
+
+Or from GitHub Packages (published as `@yassinos-coder/nestjs-shield`) — first create a project-local `.npmrc` mapping the scope to GitHub Packages and a personal access token with `read:packages`:
+
+```ini
+# .npmrc
+@yassinos-coder:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
+```
+
+```bash
+GITHUB_TOKEN=ghp_xxx npm install @yassinos-coder/nestjs-shield
 ```
 
 Node ≥ 18, NestJS 9 / 10 / 11.
@@ -253,7 +267,7 @@ Implement `ShieldStorage` (15 methods, all small) and pass it as `storage: yourA
 
 Default is RFC draft-7:
 
-```
+```http
 RateLimit-Limit: 60
 RateLimit-Remaining: 41
 RateLimit-Reset: 23
@@ -297,6 +311,50 @@ response: {
 ## Example
 
 A runnable end-to-end example lives in [`example/`](./example) — see its README.
+
+## Publishing
+
+This repo publishes to two registries with one workflow ([.github/workflows/publish.yml](.github/workflows/publish.yml)):
+
+| Registry | Name there | Auth |
+| --- | --- | --- |
+| npm public (`registry.npmjs.org`) | `nestjs-shield` | `NPM_TOKEN` repo secret |
+| GitHub Packages (`npm.pkg.github.com`) | `@yassinos-coder/nestjs-shield` | auto `GITHUB_TOKEN` |
+
+The workflow runs on each published GitHub Release, on pushes of `v*.*.*` tags, and via manual dispatch (where you can pick `npm`, `github`, or `both`). The GitHub Packages job renames the package on the fly with `npm pkg set name=@yassinos-coder/nestjs-shield` so the same source tree maps cleanly to both registries.
+
+### One-time setup
+
+1. **`NPM_TOKEN` repo secret** — required only for the npm public job.
+   - Go to [npmjs.com → Access Tokens](https://www.npmjs.com/settings/yassinoscoder/tokens) → *Generate New Token* → *Classic Token* → *Automation* (skips 2FA).
+   - In the GitHub repo: *Settings → Secrets and variables → Actions → New repository secret* → name `NPM_TOKEN`, paste the token.
+2. **`GITHUB_TOKEN`** — nothing to do. GitHub Actions provides this automatically.
+
+### Releasing
+
+```bash
+# bump version + tag
+npm version 1.0.1
+git push --follow-tags
+```
+
+Or create a GitHub Release from the UI — the workflow fires on `release: published` too.
+
+### Manual local publish (alternative)
+
+If you'd rather publish from your machine instead of CI:
+
+```bash
+# npm public
+npm login              # browser flow
+npm publish --access public
+
+# GitHub Packages — needs a PAT with write:packages
+echo "//npm.pkg.github.com/:_authToken=ghp_xxx" >> ~/.npmrc
+npm pkg set name=@yassinos-coder/nestjs-shield
+npm publish --registry=https://npm.pkg.github.com --access public
+npm pkg set name=nestjs-shield   # revert
+```
 
 ## License
 
