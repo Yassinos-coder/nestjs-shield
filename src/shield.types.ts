@@ -34,6 +34,7 @@ export interface AutoBanConfig {
   window: number;
   banDuration: number;
   escalate?: boolean;
+  maxBanDuration?: number;
 }
 
 export interface SlowDownConfig {

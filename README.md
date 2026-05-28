@@ -129,6 +129,7 @@ interface ShieldConfig {
     window: number;                        // ms — count window
     banDuration: number;                   // ms — initial ban
     escalate?: boolean;                    // 2× each repeat ban, default true
+    maxBanDuration?: number;               // ms — cap on escalated ban duration
   };
 
   slowDown?: {

@@ -124,6 +124,19 @@ end
 return { allowed, count, resetMs }
 `;
 
+const INCREMENT_LUA = `
+local key = KEYS[1]
+local by = tonumber(ARGV[1])
+local ttlMs = tonumber(ARGV[2])
+local count = redis.call('INCRBY', key, by)
+if count == by then
+  redis.call('PEXPIRE', key, ttlMs)
+end
+local ttl = redis.call('PTTL', key)
+if ttl < 0 then ttl = 0 end
+return { count, ttl }
+`;
+
 const SLIDING_COUNTER_LUA = `
 local cur = KEYS[1]
 local prev = KEYS[2]
@@ -164,10 +177,14 @@ export class RedisStorage implements ShieldStorage {
 
   async increment(key: string, ttlMs: number, by = 1): Promise<CounterResult> {
     const k = this.k(key);
-    const count = by === 1 ? await this.client.incr(k) : await this.client.incrby(k, by);
-    await this.client.pexpire(k, ttlMs);
-    const ttl = await this.client.pttl(k);
-    return { count, expiresAt: Date.now() + Math.max(0, ttl) };
+    const res = (await this.runScript('shieldIncrement', INCREMENT_LUA, [k], [by, ttlMs])) as [
+      number,
+      number,
+    ];
+    return {
+      count: Number(res[0]),
+      expiresAt: Date.now() + Math.max(0, Number(res[1])),
+    };
   }
 
   async consumeToken(
@@ -313,6 +330,7 @@ export class RedisStorage implements ShieldStorage {
       this.client.defineCommand('shieldLeakyBucket', { numberOfKeys: 1, lua: LEAKY_BUCKET_LUA });
       this.client.defineCommand('shieldSlidingLog', { numberOfKeys: 1, lua: SLIDING_LOG_LUA });
       this.client.defineCommand('shieldSlidingCounter', { numberOfKeys: 2, lua: SLIDING_COUNTER_LUA });
+      this.client.defineCommand('shieldIncrement', { numberOfKeys: 1, lua: INCREMENT_LUA });
       this.commandsDefined = true;
     } catch {
       this.commandsDefined = false;

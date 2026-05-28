@@ -40,8 +40,11 @@ export class AutoBanCheck {
 
     const banCountKey = `${KEY_BAN_COUNT}:${ip}`;
     const banCountResult = await storage.increment(banCountKey, config.banDuration * 16);
-    const escalation = config.escalate === false ? 1 : Math.pow(2, banCountResult.count - 1);
-    const duration = config.banDuration * escalation;
+    const exponent = Math.min(Math.max(0, banCountResult.count - 1), 30);
+    const escalation = config.escalate === false ? 1 : Math.pow(2, exponent);
+    const computed = config.banDuration * escalation;
+    const duration =
+      config.maxBanDuration !== undefined ? Math.min(computed, config.maxBanDuration) : computed;
     const expiresAt = Date.now() + duration;
     await storage.set(`${KEY_BAN}:${ip}`, String(expiresAt), duration);
     await storage.delete(violationsKey);

@@ -1,6 +1,6 @@
 {
   "name": "nestjs-shield",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Layered API protection for NestJS: rate limiting, IP allow/block lists, auto-ban, slow-down, UA filtering, burst caps, payload limits. Pluggable storage (memory/Redis).",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

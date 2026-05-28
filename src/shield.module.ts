@@ -1,8 +1,10 @@
 import {
   DynamicModule,
   Inject,
+  Logger,
   Module,
   ModuleMetadata,
+  OnApplicationBootstrap,
   OnModuleDestroy,
   Provider,
   Type,
@@ -15,6 +17,7 @@ import type { ShieldConfig, StorageOption } from './shield.types';
 import { MemoryStorage } from './storage/memory.storage';
 import { RedisStorage } from './storage/redis.storage';
 import type { ShieldStorage } from './storage/shield-storage.interface';
+import { BannerUtil } from './utils/banner.util';
 
 export interface ShieldAsyncOptions extends Pick<ModuleMetadata, 'imports'> {
   useFactory: (...args: unknown[]) => Promise<ShieldConfig> | ShieldConfig;
@@ -36,8 +39,22 @@ function buildStorage(option: StorageOption | undefined): ShieldStorage {
 }
 
 @Module({})
-export class ShieldModule implements OnModuleDestroy {
-  constructor(@Inject(SHIELD_STORAGE) private readonly storage: ShieldStorage) {}
+export class ShieldModule implements OnApplicationBootstrap, OnModuleDestroy {
+  private readonly logger = new Logger('Shield');
+
+  constructor(
+    @Inject(SHIELD_STORAGE) private readonly storage: ShieldStorage,
+    @Inject(SHIELD_CONFIG) private readonly config: ShieldConfig,
+    @Inject(SHIELD_ENGINE) private readonly engine: ShieldEngine,
+  ) {}
+
+  onApplicationBootstrap(): void {
+    if (this.config.enabled === false) return;
+    if (!this.engine.markBannerShown()) return;
+    const { banner, summary } = BannerUtil.build(this.config);
+    process.stdout.write(banner + '\n');
+    this.logger.log(summary);
+  }
 
   static forRoot(config: ShieldConfig = {}): DynamicModule {
     const providers: Provider[] = [

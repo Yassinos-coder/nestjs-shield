@@ -38,6 +38,8 @@ export interface EngineDecision {
 
 @Injectable()
 export class ShieldEngine {
+  private bannerShown = false;
+
   constructor(
     @Inject(SHIELD_CONFIG) private readonly config: ShieldConfig,
     @Inject(SHIELD_STORAGE) private readonly storage: ShieldStorage,
@@ -49,6 +51,12 @@ export class ShieldEngine {
 
   getStorage(): ShieldStorage {
     return this.storage;
+  }
+
+  markBannerShown(): boolean {
+    if (this.bannerShown) return false;
+    this.bannerShown = true;
+    return true;
   }
 
   async run(
@@ -167,6 +175,7 @@ export class ShieldEngine {
       release = burstOut.release;
     }
 
+    try {
     const rateLimit = this.mergeRateLimit(overrides);
     let rateLimitTtl = 0;
     if (!skipSet.has('rate-limit') && rateLimit) {
@@ -214,6 +223,16 @@ export class ShieldEngine {
     }
 
     return { allowed: true, ip, delayMs, release };
+    } catch (err) {
+      if (release) {
+        try {
+          await release();
+        } catch {
+          // release failure is non-fatal; original error must still propagate
+        }
+      }
+      throw err;
+    }
   }
 
   private merge<T extends object>(
