@@ -137,6 +137,21 @@ if ttl < 0 then ttl = 0 end
 return { count, ttl }
 `;
 
+const BURST_INCREMENT_LUA = `
+local count = redis.call('INCR', KEYS[1])
+redis.call('PEXPIRE', KEYS[1], ARGV[1])
+return count
+`;
+
+const BURST_DECREMENT_LUA = `
+local count = tonumber(redis.call('GET', KEYS[1]) or '0')
+if count <= 1 then
+  redis.call('DEL', KEYS[1])
+  return 0
+end
+return redis.call('DECR', KEYS[1])
+`;
+
 const SLIDING_COUNTER_LUA = `
 local cur = KEYS[1]
 local prev = KEYS[2]
@@ -212,10 +227,12 @@ export class RedisStorage implements ShieldStorage {
 
   async fixedWindow(key: string, ttlMs: number, limit: number): Promise<WindowResult> {
     const k = this.k(key);
-    const count = await this.client.incr(k);
-    if (count === 1) await this.client.pexpire(k, ttlMs);
-    const ttl = await this.client.pttl(k);
-    return { count, allowed: count <= limit, resetMs: Math.max(0, ttl), limit };
+    const res = (await this.runScript('shieldIncrement', INCREMENT_LUA, [k], [1, ttlMs])) as [
+      number,
+      number,
+    ];
+    const count = Number(res[0]);
+    return { count, allowed: count <= limit, resetMs: Math.max(0, Number(res[1])), limit };
   }
 
   async slidingWindowCounter(
@@ -301,16 +318,14 @@ export class RedisStorage implements ShieldStorage {
 
   async incrementConcurrent(key: string): Promise<number> {
     const k = this.k(`burst:${key}`);
-    const next = await this.client.incr(k);
-    await this.client.pexpire(k, 60_000);
-    return next;
+    const next = await this.runScript('shieldBurstIncrement', BURST_INCREMENT_LUA, [k], [60_000]);
+    return Number(next);
   }
 
   async decrementConcurrent(key: string): Promise<number> {
     const k = this.k(`burst:${key}`);
-    const next = await this.client.decr(k);
-    if (next <= 0) await this.client.del(k);
-    return Math.max(0, next);
+    const next = await this.runScript('shieldBurstDecrement', BURST_DECREMENT_LUA, [k], []);
+    return Math.max(0, Number(next));
   }
 
   private k(key: string): string {
@@ -331,6 +346,8 @@ export class RedisStorage implements ShieldStorage {
       this.client.defineCommand('shieldSlidingLog', { numberOfKeys: 1, lua: SLIDING_LOG_LUA });
       this.client.defineCommand('shieldSlidingCounter', { numberOfKeys: 2, lua: SLIDING_COUNTER_LUA });
       this.client.defineCommand('shieldIncrement', { numberOfKeys: 1, lua: INCREMENT_LUA });
+      this.client.defineCommand('shieldBurstIncrement', { numberOfKeys: 1, lua: BURST_INCREMENT_LUA });
+      this.client.defineCommand('shieldBurstDecrement', { numberOfKeys: 1, lua: BURST_DECREMENT_LUA });
       this.commandsDefined = true;
     } catch {
       this.commandsDefined = false;

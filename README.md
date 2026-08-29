@@ -37,7 +37,7 @@ Or from GitHub Packages (published as `@yassinos-coder/nestjs-shield`) — first
 GITHUB_TOKEN=ghp_xxx npm install @yassinos-coder/nestjs-shield
 ```
 
-Node ≥ 18, NestJS 9 / 10 / 11.
+Node ≥ 18, NestJS 9 / 10 / 11 / 12. NestJS 12 applications require Node ≥ 20.
 
 ## Quick start
 
