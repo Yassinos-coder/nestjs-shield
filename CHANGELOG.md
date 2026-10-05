@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-10-05
+
+### Fixed
+
+- The admin dashboard now works behind `app.setGlobalPrefix` (e.g. `/api/shield/admin`): the session cookie is scoped to the actual mount path instead of a hard-coded `/shield/admin`, and the request feed ignores dashboard traffic under any prefix.
+- README no longer recommends the Express 4 `shield/admin(.*)` exclude pattern, which crashes NestJS 11 / path-to-regexp v8 at startup.
+
 ## [1.2.0] - 2026-10-05
 
 ### Added

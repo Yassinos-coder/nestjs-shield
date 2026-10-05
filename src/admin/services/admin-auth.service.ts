@@ -13,10 +13,10 @@ import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import { SHIELD_ENGINE } from '../../shield.constants';
 import type { ShieldEngine } from '../../shield.engine';
 import type { AnyRequest, AnyResponse } from '../../shield.types';
+import { AdminRequestValidator } from '../validators/admin-request.validator';
 import {
   ADMIN_COOKIE_NAME,
   ADMIN_CSRF_HEADER,
-  ADMIN_URL_PREFIX,
   ENV_SECRET,
   LOGIN_LOCK_MS,
   LOGIN_MAX_FAILURES,
@@ -100,7 +100,7 @@ export class AdminAuthService {
   private cookie(req: AnyRequest, value: string, maxAgeSec: number): string {
     const parts = [
       `${ADMIN_COOKIE_NAME}=${value}`,
-      `Path=${ADMIN_URL_PREFIX}`,
+      `Path=${AdminRequestValidator.mountPath(req)}`,
       `Max-Age=${maxAgeSec}`,
       'HttpOnly',
       'SameSite=Strict',

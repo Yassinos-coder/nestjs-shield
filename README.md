@@ -344,7 +344,7 @@ ShieldModule.forRoot({
 });
 ```
 
-The dashboard path is fixed at `/shield/admin`. It needs `ShieldModule` (`Shield.applyTo` alone does not serve it) and does not support `app.setGlobalPrefix`: exclude it with `setGlobalPrefix('api', { exclude: ['shield/admin(.*)'] })`.
+The dashboard lives at `/shield/admin` and needs `ShieldModule` (`Shield.applyTo` alone does not serve it). It also works under `app.setGlobalPrefix`: with `setGlobalPrefix('api')` it is served at `/api/shield/admin` and the session cookie is scoped to that mount path. To serve it without the prefix, exclude it with `setGlobalPrefix('api', { exclude: ['shield/admin', 'shield/admin/{*path}'] })` (NestJS 11 syntax; on NestJS 10 and below use `shield/admin(.*)`).
 
 ## Example
 
