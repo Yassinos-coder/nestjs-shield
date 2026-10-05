@@ -16,6 +16,13 @@ type RedisLike = {
   get: (key: string) => Promise<string | null>;
   set: (key: string, value: string, mode: string, ttl: number) => Promise<string | null>;
   del: (key: string) => Promise<number>;
+  scan: (
+    cursor: string,
+    match: 'MATCH',
+    pattern: string,
+    count: 'COUNT',
+    size: number,
+  ) => Promise<[string, string[]]>;
   defineCommand?: (
     name: string,
     def: { numberOfKeys: number; lua: string },
@@ -314,6 +321,22 @@ export class RedisStorage implements ShieldStorage {
 
   async delete(key: string): Promise<void> {
     await this.client.del(this.k(key));
+  }
+
+  async scan(prefix: string, limit: number): Promise<string[]> {
+    const offset = this.prefix ? this.prefix.length + 1 : 0;
+    const pattern = `${this.k(prefix).replace(/[\\*?[\]]/g, '\\$&')}*`;
+    const keys: string[] = [];
+    let cursor = '0';
+    do {
+      const [next, batch] = await this.client.scan(cursor, 'MATCH', pattern, 'COUNT', 200);
+      cursor = next;
+      for (const key of batch) {
+        if (keys.length >= limit) break;
+        keys.push(key.slice(offset));
+      }
+    } while (cursor !== '0' && keys.length < limit);
+    return keys;
   }
 
   async incrementConcurrent(key: string): Promise<number> {

@@ -51,6 +51,7 @@ export interface ShieldStorage {
   get(key: string): Promise<string | null>;
   set(key: string, value: string, ttlMs: number): Promise<void>;
   delete(key: string): Promise<void>;
+  scan?(prefix: string, limit: number): Promise<string[]>;
 
   incrementConcurrent(key: string): Promise<number>;
   decrementConcurrent(key: string): Promise<number>;

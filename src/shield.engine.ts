@@ -1,4 +1,7 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
+import { SHIELD_RUNTIME } from './admin/constants/admin.constants';
+import type { ShieldRuntime } from './admin/interfaces';
+import { AdminDecisionMapper } from './admin/mappers/admin-decision.mapper';
 import { AutoBanCheck } from './checks/auto-ban.check';
 import { BlacklistCheck } from './checks/blacklist.check';
 import { BurstCheck } from './checks/burst.check';
@@ -43,6 +46,7 @@ export class ShieldEngine {
   constructor(
     @Inject(SHIELD_CONFIG) private readonly config: ShieldConfig,
     @Inject(SHIELD_STORAGE) private readonly storage: ShieldStorage,
+    @Optional() @Inject(SHIELD_RUNTIME) private readonly runtime?: ShieldRuntime,
   ) {}
 
   getConfig(): ShieldConfig {
@@ -59,38 +63,57 @@ export class ShieldEngine {
     return true;
   }
 
+  resolveIp(req: AnyRequest): string {
+    return this.config.ipResolver
+      ? this.config.ipResolver(req)
+      : IpUtil.resolve(req, this.config.trustProxy);
+  }
+
   async run(
     req: AnyRequest,
     res: AnyResponse,
     overrides: DecoratorOverrides = {},
   ): Promise<EngineDecision> {
-    if (this.config.enabled === false) return { allowed: true, ip: '' };
+    const runtime = this.runtime?.isActive() ? this.runtime : undefined;
+    const config = runtime ? runtime.effectiveConfig(this.config) : this.config;
 
-    const ip = this.config.ipResolver
-      ? this.config.ipResolver(req)
-      : IpUtil.resolve(req, this.config.trustProxy);
+    const decision = await this.evaluate(req, res, overrides, config, runtime !== undefined);
+    runtime?.record(req, res, AdminDecisionMapper.fromEngine(decision));
+    return decision;
+  }
+
+  private async evaluate(
+    req: AnyRequest,
+    res: AnyResponse,
+    overrides: DecoratorOverrides,
+    config: ShieldConfig,
+    checkManualBans: boolean,
+  ): Promise<EngineDecision> {
+    if (config.enabled === false) return { allowed: true, ip: checkManualBans ? this.resolveIp(req) : '' };
+
+    const ip = this.resolveIp(req);
 
     if (overrides.skip === true) return { allowed: true, ip };
     const skipSet = new Set<ShieldLayer>(Array.isArray(overrides.skip) ? overrides.skip : []);
 
-    const whitelist = this.merge(this.config.whitelist, overrides.whitelist);
+    const whitelist = this.merge(config.whitelist, overrides.whitelist);
     if (!skipSet.has('whitelist')) {
       const wl = WhitelistCheck.run(ip, whitelist);
       if (wl.allowed && wl.layer === 'whitelist') return { allowed: true, ip };
     }
 
-    const blacklist = this.merge(this.config.blacklist, overrides.blacklist);
+    const blacklist = this.merge(config.blacklist, overrides.blacklist);
     if (!skipSet.has('blacklist')) {
       const bl = BlacklistCheck.run(ip, blacklist);
       if (!bl.allowed) {
-        await AutoBanCheck.recordViolation(this.storage, ip, this.config.autoBan);
+        await AutoBanCheck.recordViolation(this.storage, ip, config.autoBan);
         this.notifyReject(req, res, ip, bl.layer ?? 'blacklist', bl.reason ?? 'blocked', bl.status ?? 403);
         return {
           allowed: false,
           ip,
           exception: new ShieldBlockedException({
-            message: this.config.response?.blocked403?.message ?? bl.reason ?? 'Forbidden',
-            code: this.config.response?.blocked403?.code,
+            message: config.response?.blocked403?.message ?? bl.reason ?? 'Forbidden',
+            code: config.response?.blocked403?.code,
             layer: 'blacklist',
             status: bl.status,
           }),
@@ -99,7 +122,7 @@ export class ShieldEngine {
     }
 
     if (!skipSet.has('auto-ban')) {
-      const ab = await AutoBanCheck.check(this.storage, ip, this.config.autoBan);
+      const ab = await AutoBanCheck.check(this.storage, ip, config.autoBan, checkManualBans);
       if (!ab.allowed) {
         if (ab.retryAfterMs) HeadersUtil.writeRetryAfter(res, ab.retryAfterMs);
         this.notifyReject(req, res, ip, 'auto-ban', ab.reason ?? 'banned', ab.status ?? 403, ab.retryAfterMs);
@@ -107,8 +130,8 @@ export class ShieldEngine {
           allowed: false,
           ip,
           exception: new ShieldBlockedException({
-            message: this.config.response?.blocked403?.message ?? ab.reason ?? 'Forbidden',
-            code: this.config.response?.blocked403?.code,
+            message: config.response?.blocked403?.message ?? ab.reason ?? 'Forbidden',
+            code: config.response?.blocked403?.code,
             layer: 'auto-ban',
             retryAfter: ab.retryAfterMs ? Math.ceil(ab.retryAfterMs / 1000) : undefined,
           }),
@@ -117,27 +140,27 @@ export class ShieldEngine {
     }
 
     const ua = UaUtil.extract(req.headers);
-    const userAgent = (overrides.userAgent ?? this.config.userAgent) as
+    const userAgent = (overrides.userAgent ?? config.userAgent) as
       | ShieldConfig['userAgent']
       | undefined;
     if (!skipSet.has('user-agent')) {
       const uaOut = UserAgentCheck.run(ua, userAgent);
       if (!uaOut.allowed) {
-        await AutoBanCheck.recordViolation(this.storage, ip, this.config.autoBan);
+        await AutoBanCheck.recordViolation(this.storage, ip, config.autoBan);
         this.notifyReject(req, res, ip, 'user-agent', uaOut.reason ?? 'blocked', 403);
         return {
           allowed: false,
           ip,
           exception: new ShieldBlockedException({
-            message: this.config.response?.blocked403?.message ?? uaOut.reason ?? 'Forbidden',
-            code: this.config.response?.blocked403?.code,
+            message: config.response?.blocked403?.message ?? uaOut.reason ?? 'Forbidden',
+            code: config.response?.blocked403?.code,
             layer: 'user-agent',
           }),
         };
       }
     }
 
-    const payload = (overrides.maxPayload ?? this.config.payload) as
+    const payload = (overrides.maxPayload ?? config.payload) as
       | ShieldConfig['payload']
       | undefined;
     if (!skipSet.has('payload')) {
@@ -148,8 +171,8 @@ export class ShieldEngine {
           allowed: false,
           ip,
           exception: new ShieldPayloadException({
-            message: this.config.response?.payload413?.message ?? pl.reason ?? 'Payload too large',
-            code: this.config.response?.payload413?.code,
+            message: config.response?.payload413?.message ?? pl.reason ?? 'Payload too large',
+            code: config.response?.payload413?.code,
             layer: 'payload',
           }),
         };
@@ -157,7 +180,7 @@ export class ShieldEngine {
     }
 
     let release: (() => Promise<void> | void) | undefined;
-    const burst = (overrides.burst ?? this.config.burst) as ShieldConfig['burst'];
+    const burst = (overrides.burst ?? config.burst) as ShieldConfig['burst'];
     if (!skipSet.has('burst') && burst) {
       const burstOut = await BurstCheck.check(this.storage, ip, burst);
       if (!burstOut.allowed) {
@@ -166,8 +189,8 @@ export class ShieldEngine {
           allowed: false,
           ip,
           exception: new ShieldRateLimitException({
-            message: this.config.response?.rateLimit429?.message ?? burstOut.reason ?? 'Too many concurrent requests',
-            code: this.config.response?.rateLimit429?.code,
+            message: config.response?.rateLimit429?.message ?? burstOut.reason ?? 'Too many concurrent requests',
+            code: config.response?.rateLimit429?.code,
             layer: 'burst',
           }),
         };
@@ -176,7 +199,7 @@ export class ShieldEngine {
     }
 
     try {
-    const rateLimit = this.mergeRateLimit(overrides);
+    const rateLimit = this.mergeRateLimit(config, overrides);
     let rateLimitTtl = 0;
     if (!skipSet.has('rate-limit') && rateLimit) {
       const rl = await RateLimitCheck.check(this.storage, req, ip, rateLimit);
@@ -191,18 +214,18 @@ export class ShieldEngine {
         );
       }
       if (!rl.allowed) {
-        if (this.config.response?.rateLimit429?.includeRetryAfter !== false && rl.retryAfterMs) {
+        if (config.response?.rateLimit429?.includeRetryAfter !== false && rl.retryAfterMs) {
           HeadersUtil.writeRetryAfter(res, rl.retryAfterMs);
         }
-        await AutoBanCheck.recordViolation(this.storage, ip, this.config.autoBan);
+        await AutoBanCheck.recordViolation(this.storage, ip, config.autoBan);
         if (release) await release();
         this.notifyReject(req, res, ip, 'rate-limit', rl.reason ?? 'rate limited', 429, rl.retryAfterMs);
         return {
           allowed: false,
           ip,
           exception: new ShieldRateLimitException({
-            message: this.config.response?.rateLimit429?.message ?? rl.reason ?? 'Too many requests',
-            code: this.config.response?.rateLimit429?.code,
+            message: config.response?.rateLimit429?.message ?? rl.reason ?? 'Too many requests',
+            code: config.response?.rateLimit429?.code,
             layer: 'rate-limit',
             retryAfter: rl.retryAfterMs ? Math.ceil(rl.retryAfterMs / 1000) : undefined,
           }),
@@ -211,7 +234,7 @@ export class ShieldEngine {
     }
 
     let delayMs: number | undefined;
-    const slowDown = (overrides.slowDown ?? this.config.slowDown) as ShieldConfig['slowDown'];
+    const slowDown = (overrides.slowDown ?? config.slowDown) as ShieldConfig['slowDown'];
     if (!skipSet.has('slow-down') && slowDown) {
       const sd = await SlowDownCheck.check(
         this.storage,
@@ -245,12 +268,15 @@ export class ShieldEngine {
     return { ...base, ...override };
   }
 
-  private mergeRateLimit(overrides: DecoratorOverrides): ShieldConfig['rateLimit'] {
-    if (!this.config.rateLimit && !overrides.rateLimit) return undefined;
+  private mergeRateLimit(
+    config: ShieldConfig,
+    overrides: DecoratorOverrides,
+  ): ShieldConfig['rateLimit'] {
+    if (!config.rateLimit && !overrides.rateLimit) return undefined;
     if (overrides.rateLimit) {
-      return { ...(this.config.rateLimit ?? {}), ...overrides.rateLimit };
+      return { ...(config.rateLimit ?? {}), ...overrides.rateLimit };
     }
-    return this.config.rateLimit;
+    return config.rateLimit;
   }
 
   private notifyReject(

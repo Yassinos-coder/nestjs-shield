@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-10-05
+
+### Added
+
+- Admin dashboard at `/shield/admin`, enabled with `SHIELD_DASH=true` and protected by `SHIELD_ADMIN_USER` / `SHIELD_ADMIN_PASSWORD` from the environment. Without credentials the page shows a configuration error and login is disabled.
+- Dashboard controls: shield on/off, under attack mode, rate limit, auto-ban, whitelist and blacklist editing, manual IP bans, and a live feed of requests with the shield decision, response status and latency. Overrides are persisted in shield storage.
+- `admin` option on `ShieldConfig` (`attackModeFactor`, `maxEvents`).
+- Optional `scan(prefix, limit)` on `ShieldStorage`, implemented by `MemoryStorage` and `RedisStorage`.
+
+### Changed
+
+- Manually set `shield:ban:*` entries are enforced even when `autoBan` is not configured, while the dashboard is enabled.
+
 ## [1.1.0] - 2026-08-29
 
 ### Added

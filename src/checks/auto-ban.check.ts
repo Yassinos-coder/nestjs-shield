@@ -7,8 +7,9 @@ export class AutoBanCheck {
     storage: ShieldStorage,
     ip: string,
     config?: AutoBanConfig,
+    checkManualBans = false,
   ): Promise<CheckOutcome> {
-    if (!config) return { allowed: true };
+    if (!config && !checkManualBans) return { allowed: true };
     const banKey = `${KEY_BAN}:${ip}`;
     const raw = await storage.get(banKey);
     if (!raw) return { allowed: true };

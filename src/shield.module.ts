@@ -10,6 +10,11 @@ import {
   Type,
 } from '@nestjs/common';
 import { APP_GUARD, Reflector } from '@nestjs/core';
+import { ADMIN_PROVIDERS } from './admin/admin.providers';
+import { AdminEnvValidator } from './admin/validators/admin-env.validator';
+import { SHIELD_RUNTIME } from './admin/constants/admin.constants';
+import { ShieldAdminController } from './admin/controllers/shield-admin.controller';
+import type { ShieldRuntime } from './admin/interfaces';
 import { SHIELD_CONFIG, SHIELD_ENGINE, SHIELD_STORAGE } from './shield.constants';
 import { ShieldEngine } from './shield.engine';
 import { ShieldGuard } from './shield.guard';
@@ -54,6 +59,7 @@ export class ShieldModule implements OnApplicationBootstrap, OnModuleDestroy {
     const { banner, summary } = BannerUtil.build(this.config);
     process.stdout.write(banner + '\n');
     this.logger.log(summary);
+    if (AdminEnvValidator.isEnabled()) this.logger.log('Admin dashboard enabled at /shield/admin');
   }
 
   static forRoot(config: ShieldConfig = {}): DynamicModule {
@@ -64,10 +70,12 @@ export class ShieldModule implements OnApplicationBootstrap, OnModuleDestroy {
         useFactory: () => buildStorage(config.storage),
       },
       Reflector,
+      ...ADMIN_PROVIDERS,
       {
         provide: SHIELD_ENGINE,
-        useFactory: (cfg: ShieldConfig, storage: ShieldStorage) => new ShieldEngine(cfg, storage),
-        inject: [SHIELD_CONFIG, SHIELD_STORAGE],
+        useFactory: (cfg: ShieldConfig, storage: ShieldStorage, runtime: ShieldRuntime) =>
+          new ShieldEngine(cfg, storage, runtime),
+        inject: [SHIELD_CONFIG, SHIELD_STORAGE, SHIELD_RUNTIME],
       },
       ShieldGuard,
       { provide: APP_GUARD, useExisting: ShieldGuard },
@@ -76,6 +84,7 @@ export class ShieldModule implements OnApplicationBootstrap, OnModuleDestroy {
     return {
       module: ShieldModule,
       global: true,
+      controllers: [ShieldAdminController],
       providers,
       exports: [SHIELD_CONFIG, SHIELD_STORAGE, SHIELD_ENGINE, ShieldGuard],
     };
@@ -94,10 +103,12 @@ export class ShieldModule implements OnApplicationBootstrap, OnModuleDestroy {
         inject: [SHIELD_CONFIG],
       },
       Reflector,
+      ...ADMIN_PROVIDERS,
       {
         provide: SHIELD_ENGINE,
-        useFactory: (cfg: ShieldConfig, storage: ShieldStorage) => new ShieldEngine(cfg, storage),
-        inject: [SHIELD_CONFIG, SHIELD_STORAGE],
+        useFactory: (cfg: ShieldConfig, storage: ShieldStorage, runtime: ShieldRuntime) =>
+          new ShieldEngine(cfg, storage, runtime),
+        inject: [SHIELD_CONFIG, SHIELD_STORAGE, SHIELD_RUNTIME],
       },
       ShieldGuard,
       { provide: APP_GUARD, useExisting: ShieldGuard },
@@ -107,6 +118,7 @@ export class ShieldModule implements OnApplicationBootstrap, OnModuleDestroy {
       module: ShieldModule,
       global: true,
       imports: options.imports ?? [],
+      controllers: [ShieldAdminController],
       providers,
       exports: [SHIELD_CONFIG, SHIELD_STORAGE, SHIELD_ENGINE, ShieldGuard],
     };

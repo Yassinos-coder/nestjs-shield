@@ -66,6 +66,8 @@ export {
   ShieldPayloadException,
 } from './exceptions/shield.exceptions';
 
+export type { AdminOptions, AdminOverrides, AdminEvent, AdminStats } from './admin/interfaces';
+
 export { IpUtil } from './utils/ip.util';
 export { HeadersUtil } from './utils/headers.util';
 export { UaUtil } from './utils/ua.util';

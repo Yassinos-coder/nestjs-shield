@@ -192,6 +192,17 @@ export class MemoryStorage implements ShieldStorage {
     this.counters.delete(key);
   }
 
+  async scan(prefix: string, limit: number): Promise<string[]> {
+    const now = Date.now();
+    const keys: string[] = [];
+    for (const [key, entry] of this.map) {
+      if (keys.length >= limit) break;
+      if (entry.expiresAt <= now || !key.startsWith(prefix)) continue;
+      keys.push(key);
+    }
+    return keys;
+  }
+
   async incrementConcurrent(key: string): Promise<number> {
     const next = (this.counters.get(key) ?? 0) + 1;
     this.counters.set(key, next);

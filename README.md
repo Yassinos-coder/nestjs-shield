@@ -309,6 +309,43 @@ response: {
 
 `info` is `{ layer, ip, reason, status, retryAfterMs? }`. The hook is wrapped in try/catch and never breaks the pipeline.
 
+## Admin dashboard
+
+A light, dependency-free dashboard is served at `/shield/admin` by `ShieldModule`. It is off unless you enable it in your environment:
+
+```env
+SHIELD_DASH=true
+SHIELD_ADMIN_USER=admin
+SHIELD_ADMIN_PASSWORD=change-me
+# optional, signs the session cookie (defaults to a key derived from the credentials)
+SHIELD_ADMIN_SECRET=
+```
+
+- `SHIELD_DASH` unset or not `true`: every dashboard route returns 404.
+- `SHIELD_DASH=true` without `SHIELD_ADMIN_USER` and `SHIELD_ADMIN_PASSWORD`: the page shows a configuration error and login is disabled.
+- Login uses a signed, `HttpOnly`, `SameSite=Strict` cookie (8h), failed logins are throttled per IP, and mutating calls require a CSRF header.
+- The dashboard routes skip the shield themselves, so you cannot lock yourself out with a rate limit. Put it behind HTTPS or a VPN anyway.
+
+What you can do:
+
+- Turn the shield on or off.
+- Under attack mode: divides the rate limit by `admin.attackModeFactor` (default 5), blocks empty and bot-like user-agents, and halves the auto-ban threshold.
+- Edit the rate limit, auto-ban settings, whitelist and blacklist.
+- List, add and remove IP bans.
+- Watch live traffic: incoming requests with the shield's decision, and the response status and latency.
+
+Changes are saved in shield storage (key `shield:admin:overrides`) and override your `forRoot` config. Every instance re-reads them every 2 seconds, so with Redis storage they are shared and survive restarts. With memory storage they reset on restart. "Reset all overrides" returns to your code config.
+
+The live traffic feed is kept in memory per instance (last 500 requests, `admin.maxEvents`). Listing bans needs a storage with `scan` (Memory and Redis have it; custom storages can add it).
+
+```ts
+ShieldModule.forRoot({
+  admin: { attackModeFactor: 5, maxEvents: 500 },
+});
+```
+
+The dashboard path is fixed at `/shield/admin`. It needs `ShieldModule` (`Shield.applyTo` alone does not serve it) and does not support `app.setGlobalPrefix`: exclude it with `setGlobalPrefix('api', { exclude: ['shield/admin(.*)'] })`.
+
 ## Example
 
 A runnable end-to-end example lives in [`example/`](./example) — see its README.

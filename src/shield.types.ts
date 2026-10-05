@@ -1,3 +1,4 @@
+import type { AdminOptions } from './admin/interfaces';
 import type { ShieldLayer } from './shield.constants';
 import type { ShieldStorage } from './storage/shield-storage.interface';
 
@@ -103,6 +104,7 @@ export interface ShieldConfig {
   burst?: BurstConfig;
   payload?: PayloadConfig;
   response?: ResponseConfig;
+  admin?: AdminOptions;
 }
 
 export type AnyRequest = {
