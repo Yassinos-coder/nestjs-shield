@@ -1,398 +1,488 @@
 # nestjs-shield
 
-Layered API protection for NestJS in a single drop-in module.
-
-- **Rate limiting** with five algorithms — token bucket (default), sliding window counter, sliding window log, fixed window, leaky bucket
-- **IP allow / block lists** with CIDR support
-- **Auto-ban** that escalates repeated abusers to a temporary block
-- **Slow-down** that adds progressive delay before issuing a hard 429
-- **User-Agent filtering** with block / allow / require-present
-- **Burst protection** — concurrent in-flight cap per IP (slowloris cover)
-- **Payload limits** — body + header byte caps
-- **Pluggable storage** — in-memory (default) or Redis (atomic Lua scripts) — bring your own adapter for anything else
-- **Per-route overrides** via decorators
-- **Standard rate-limit headers** (draft-7 by default, draft-6 supported)
-
-No geo-fencing in v1. No dependency on `@nestjs/throttler` — the engine is standalone.
-
-## Install
-
-From the public npm registry:
-
-```bash
-npm install nestjs-shield
-# optional, only if you use Redis storage
-npm install ioredis
-```
-
-Or from GitHub Packages (published as `@yassinos-coder/nestjs-shield`) — first create a project-local `.npmrc` mapping the scope to GitHub Packages and a personal access token with `read:packages`:
-
-```ini
-# .npmrc
-@yassinos-coder:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
-```
-
-```bash
-GITHUB_TOKEN=ghp_xxx npm install @yassinos-coder/nestjs-shield
-```
-
-Node ≥ 18, NestJS 9 / 10 / 11 / 12. NestJS 12 applications require Node ≥ 20.
-
-## Quick start
-
-### Option A — global guard via `forRoot` (recommended)
+**Protect your NestJS API in one module.** Rate limiting, automatic bans, IP lists, bot and scanner blocking, and a built-in admin dashboard, with no extra services required.
 
 ```ts
 // app.module.ts
-import { Module } from '@nestjs/common';
+@Module({ imports: [ShieldModule.forEnv()] })
+export class AppModule {}
+```
+
+That is a working setup: every route is rate limited, repeat abusers are banned for a while, and scanners hitting `/.env` or `/wp-login.php` are caught. Everything is tuned from environment variables.
+
+**On this page:** [Install](#install) · [Quick start](#quick-start) · [Behind a proxy](#behind-a-proxy-do-this-first) · [What it protects against](#what-it-protects-against) · [Configuration](#configuration) · [Recipes](#recipes) · [Admin dashboard](#admin-dashboard) · [Reference](#reference) · [Troubleshooting](#troubleshooting)
+
+---
+
+## Install
+
+```bash
+npm install nestjs-shield
+npm install ioredis   # only if you want Redis (recommended for more than one server)
+```
+
+Needs Node 18+ and NestJS 9, 10, 11 or 12 on the Express adapter (NestJS 12 needs Node 20+).
+Also published to GitHub Packages as `@yassinos-coder/nestjs-shield` ([how](#publishing-for-maintainers)).
+
+## Quick start
+
+### Option 1: configure with environment variables (recommended)
+
+```ts
 import { ShieldModule } from 'nestjs-shield';
 
 @Module({
-  imports: [
-    ShieldModule.forRoot({
-      rateLimit: { algorithm: 'token-bucket', limit: 60, ttl: 60_000 },
-      autoBan:   { threshold: 10, window: 60_000, banDuration: 5 * 60_000, escalate: true },
-      blacklist: { ips: ['10.10.10.10'] },
-    }),
-  ],
+  imports: [ShieldModule.forEnv()],
 })
 export class AppModule {}
 ```
 
-### Option B — middleware-style, configured from `main.ts`
-
-```ts
-// main.ts
-import { NestFactory } from '@nestjs/core';
-import { Shield } from 'nestjs-shield';
-import { AppModule } from './app.module';
-
-async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
-  Shield.applyTo(app, {
-    rateLimit: { limit: 60, ttl: 60_000 },
-    burst: { maxConcurrent: 50 },
-  });
-  await app.listen(3000);
-}
-bootstrap();
+```env
+# .env: all optional, these are the defaults
+SHIELD_LIMIT=60                 # requests allowed per window, per client
+SHIELD_TTL=60000                # window length in milliseconds
+SHIELD_TRUST_PROXY=cloudflare   # see "Behind a proxy" below
+REDIS_URL=redis://localhost:6379   # leave empty to keep counters in memory
 ```
 
-You can use both together — when you do, `applyTo` resolves the engine already created by `ShieldModule` (one config drives both).
+The full list of variables is in [Configuration](#configuration).
 
-### `forRootAsync` with ConfigService
+### Option 2: configure in code
+
+```ts
+ShieldModule.forRoot({
+  trustProxy: 'cloudflare',
+  rateLimit: { limit: 60, ttl: 60_000 },
+  autoBan: { threshold: 10, window: 60_000, banDuration: 5 * 60_000 },
+  probes: true,
+});
+```
+
+### Option 3: configure from your own config service
 
 ```ts
 ShieldModule.forRootAsync({
   imports: [ConfigModule],
   inject: [ConfigService],
-  useFactory: (cfg: ConfigService) => ({
-    rateLimit: {
-      limit: cfg.get<number>('RATE_LIMIT', 60),
-      ttl:   cfg.get<number>('RATE_TTL', 60_000),
-    },
-    storage: { type: 'redis', client: new Redis(cfg.get('REDIS_URL')!) },
+  useFactory: (config: ConfigService) => ({
+    trustProxy: 'cloudflare',
+    storage: { type: 'redis', url: config.getOrThrow('REDIS_URL') },
+    rateLimit: { limit: config.get('RATE_LIMIT', 60), ttl: 60_000 },
   }),
 });
 ```
 
-## Configuration reference
+### Option 4: middleware style, from `main.ts`
 
 ```ts
-interface ShieldConfig {
-  enabled?: boolean;                       // default true
-  trustProxy?: boolean | number;           // false; number = trust N proxies left of the client
-  ipResolver?: (req) => string;            // your own IP extraction
+import { Shield } from 'nestjs-shield';
 
-  storage?:
-    | 'memory'
-    | { type: 'memory'; maxKeys?: number } // default 100_000
-    | { type: 'redis'; client: Redis; keyPrefix?: string }
-    | ShieldStorage;                       // bring your own
-
-  rateLimit?: {
-    algorithm?: 'token-bucket' | 'sliding-window' | 'sliding-window-log' | 'fixed-window' | 'leaky-bucket';
-    limit: number;
-    ttl: number;                           // ms
-    keyBy?: 'ip' | { header: string } | ((req) => string);
-    skip?: (req) => boolean;
-    headers?: boolean;                     // default true
-    standardHeaders?: 'draft-6' | 'draft-7';
-  };
-
-  whitelist?: { ips?: string[]; cidrs?: string[] };
-  blacklist?: { ips?: string[]; cidrs?: string[]; statusCode?: number };
-
-  autoBan?: {
-    threshold: number;                     // # of 429/403s before ban
-    window: number;                        // ms — count window
-    banDuration: number;                   // ms — initial ban
-    escalate?: boolean;                    // 2× each repeat ban, default true
-    maxBanDuration?: number;               // ms — cap on escalated ban duration
-  };
-
-  slowDown?: {
-    delayAfter: number;
-    delayMs: number | ((hit: number) => number);
-    maxDelayMs?: number;
-  };
-
-  userAgent?: {
-    block?: (string | RegExp)[];
-    allow?: (string | RegExp)[];           // overrides block when matched
-    requirePresent?: boolean;
-  };
-
-  burst?: { maxConcurrent: number };
-
-  payload?: { maxBodyBytes?: number; maxHeaderBytes?: number };
-
-  response?: {
-    rateLimit429?: { message?: string; code?: string; includeRetryAfter?: boolean };
-    blocked403?:   { message?: string; code?: string };
-    payload413?:   { message?: string; code?: string };
-    onReject?:     (req, res, info) => void;   // observability
-  };
-}
+const app = await NestFactory.create(AppModule);
+Shield.applyTo(app, { rateLimit: { limit: 60, ttl: 60_000 } });
 ```
 
-## Algorithms
+You can combine this with `ShieldModule`; the module's configuration is then reused.
 
-All algorithms share the same `{ limit, ttl }` knobs and the same storage interface, so switching is one config line.
+---
 
-| Algorithm | Storage cost | Burst behavior | Smoothness | Use when |
-| --- | --- | --- | --- | --- |
-| `token-bucket` (default) | 2 small numbers per IP | Allows initial burst up to `limit`, then drips | Smooth | General-purpose bursty APIs |
-| `sliding-window` | 2 counters | Cannot 2× at window edges | Smooth | When fairness matters and storage is precious |
-| `sliding-window-log` | one sorted set | Exact | Exact | Strict compliance, smaller scale |
-| `fixed-window` | 1 counter | Allows up to 2× at window boundary | Stepped | Cheapest, very large scale, edge-burst OK |
-| `leaky-bucket` | 2 small numbers per IP | Queue overflow rejects | Very smooth | Outbound shaping, traffic smoothing |
+## Behind a proxy: do this first
 
-## Pipeline order
+If your app runs behind Cloudflare, Railway, Render, nginx or any load balancer, the shield must be told how to find the **real visitor IP**. Without this every visitor looks like the proxy, and they all share one rate limit and one ban.
 
-Every request runs the chain in this fixed order, short-circuiting on the first reject:
+| Your setup | Set |
+| --- | --- |
+| Cloudflare, Railway, Render | `trustProxy: 'cloudflare'` |
+| One reverse proxy (nginx, Caddy, a load balancer) | `trustProxy: 1` |
+| Two proxies in a row | `trustProxy: 2` |
+| A platform with its own header (Fly.io, ...) | `ipHeader: 'fly-client-ip'` |
+| Something unusual | `ipResolver: (req) => ...` |
+| Directly on the internet | leave it unset |
 
-1. `whitelist` — allow ⇒ skip everything else
-2. `blacklist` — block ⇒ 403
-3. `auto-ban` — banned ⇒ 403 with `Retry-After`
-4. `user-agent` — blocked ⇒ 403
-5. `payload` — too large ⇒ 413
-6. `burst` — too many in-flight ⇒ 429
-7. `rate-limit` — over limit ⇒ 429, also feeds auto-ban
-8. `slow-down` — in soft zone ⇒ delay, then allow
+`'cloudflare'` reads `CF-Connecting-IP` first, then the first `X-Forwarded-For` entry, then the socket address.
 
-## Decorators (per-route overrides)
+The shield also watches for this mistake: if requests arrive from a private address with a forwarding header and `trustProxy` is unset, it logs one warning telling you what to set.
 
-```ts
-import {
-  RateLimit, SkipShield, Blacklist, Whitelist,
-  SlowDown, MaxPayload, BurstLimit, UserAgentPolicy,
-} from 'nestjs-shield';
+---
 
-@Controller('api')
-export class ApiController {
-  @Get('hot')
-  @RateLimit({ algorithm: 'sliding-window-log', limit: 5, ttl: 10_000 })
-  hot() {}
+## What it protects against
 
-  @Get('health')
-  @SkipShield()                       // bypass all checks
-  health() {}
+Every request passes these checks in this order. The first one that rejects ends the request.
 
-  @Get('mixed')
-  @SkipShield('rate-limit', 'slow-down')   // skip specific layers only
-  mixed() {}
+| # | Layer | What it does | Rejects with |
+| --- | --- | --- | --- |
+| 1 | **Whitelist** | Trusted addresses skip everything else | (allowed) |
+| 2 | **Blacklist** | Blocks listed IPs and CIDR ranges | 403 |
+| 3 | **Auto-ban** | Temporarily bans clients that keep getting rejected; bans double on repeat offences | 403 + `Retry-After` |
+| 4 | **User-Agent** | Blocks, allows or requires user agents | 403 |
+| 5 | **Payload** | Caps body and header size | 413 |
+| 6 | **Burst** | Caps concurrent in-flight requests per IP (slowloris cover) | 429 |
+| 7 | **Rate limit** | Five algorithms, standard `RateLimit-*` headers | 429 + `Retry-After` |
+| 8 | **Slow-down** | Adds a growing delay as a client nears the limit | (delayed) |
 
-  @Post('upload')
-  @MaxPayload({ maxBodyBytes: 1_000_000 })
-  upload() {}
+Also built in:
 
-  @Get('strict-ua')
-  @UserAgentPolicy({ block: [/curl/i], requirePresent: true })
-  strictUa() {}
+- **Scanner probes.** Hits on `/.env`, `/wp-login.php`, `/phpmyadmin` and similar count as violations even though no route exists for them, so scanners get auto-banned.
+- **Health checks are left alone.** `/health`, `/healthz`, `/livez`, `/readyz` and `/api/health` skip the shield by default.
+- **Redis can fail without taking you down.** If Redis is unreachable the shield keeps counting in memory and logs a warning, instead of failing requests.
+- **Admin dashboard** with live traffic, charts, bans and editable limits.
 
-  @Get('vip')
-  @Whitelist({ cidrs: ['192.168.0.0/16'] })
-  vip() {}
+---
 
-  @Get('blocked-net')
-  @Blacklist({ cidrs: ['203.0.113.0/24'] })
-  blocked() {}
+## Configuration
 
-  @Get('long')
-  @BurstLimit({ maxConcurrent: 2 })
-  long() {}
+### Environment variables (used by `forEnv()`)
 
-  @Get('slow')
-  @SlowDown({ delayAfter: 5, delayMs: 250 })
-  slow() {}
-}
-```
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `SHIELD_ENABLED` | `true` | Set `false` to switch the shield off |
+| `SHIELD_LIMIT` | `60` | Requests allowed per window, per client |
+| `SHIELD_TTL` | `60000` | Window length in **milliseconds** |
+| `SHIELD_ALGORITHM` | `token-bucket` | `token-bucket`, `sliding-window`, `sliding-window-log`, `fixed-window`, `leaky-bucket` |
+| `SHIELD_TRUST_PROXY` | off | `cloudflare`, `true`, or a number of proxy hops |
+| `SHIELD_AUTOBAN_THRESHOLD` | `10` | Rejections inside the window that trigger a ban |
+| `SHIELD_AUTOBAN_WINDOW` | `60000` | Window for counting rejections, in ms |
+| `SHIELD_AUTOBAN_DURATION` | `300000` | First ban length in ms (doubles on repeat offences) |
+| `SHIELD_BURST_MAX` | off | Max concurrent requests per IP |
+| `SHIELD_MAX_BODY_BYTES` | off | Max request body size |
+| `SHIELD_PROBES` | `true` | Count scanner probes toward auto-ban |
+| `SHIELD_SKIP_PATHS` | health checks | Comma-separated paths the shield ignores |
+| `SHIELD_REDIS_URL` or `REDIS_URL` | memory | Use Redis for counters and bans |
+| `SHIELD_DASH` | off | `true` turns on the [admin dashboard](#admin-dashboard) |
+| `SHIELD_ADMIN_USER`, `SHIELD_ADMIN_PASSWORD` | none | Dashboard login (required when the dashboard is on) |
+| `SHIELD_ADMIN_SECRET` | derived | Optional key that signs the dashboard session cookie |
 
-Decorators merge over the global config — anything you omit falls through to the global setting.
+Anything you pass to `forEnv({ ... })` overrides the environment, for example `ShieldModule.forEnv({ userAgent: { requirePresent: true } })`.
 
-## Storage adapters
-
-### Memory (default)
+### Full option reference (`forRoot` / `forRootAsync`)
 
 ```ts
 ShieldModule.forRoot({
-  storage: { type: 'memory', maxKeys: 200_000 },   // LRU evicts oldest 10% when full
+  enabled: true,                      // master switch
+
+  // ---- who is the client? -------------------------------------------------
+  trustProxy: 'cloudflare',           // false | true | number | 'cloudflare'
+  ipHeader: 'fly-client-ip',          // read the IP from this header instead
+  ipResolver: (req) => '...',         // or compute it yourself
+
+  // ---- where counters live ------------------------------------------------
+  storage: 'memory',                  // default. Or { type: 'memory', maxKeys: 100_000 }
+  // storage: { type: 'redis', url: process.env.REDIS_URL },        // library manages the connection
+  // storage: { type: 'redis', client: myIoredisClient },           // or bring your own client
+  // storage: { type: 'redis', url, failOpen: false },              // opt out of the memory fallback
+  banStorage: undefined,              // keep bans in a different store than counters
+
+  // ---- the layers (all optional) -----------------------------------------
+  rateLimit: {
+    algorithm: 'token-bucket',        // see "Algorithms"
+    limit: 60,                        // requests per window
+    ttl: 60_000,                      // window, ms
+    keyBy: 'ip',                      // 'ip' | { header: 'x-api-key' } | (req) => string
+    skip: (req) => false,             // exempt some requests from the limit only
+    headers: true,                    // send RateLimit-* headers
+    standardHeaders: 'draft-7',       // or 'draft-6' (X-RateLimit-*)
+  },
+  autoBan: {
+    threshold: 10,                    // rejections that trigger a ban...
+    window: 60_000,                   // ...within this many ms
+    banDuration: 300_000,             // first ban, ms
+    escalate: true,                   // double on every repeat
+    maxBanDuration: 86_400_000,       // cap for escalated bans
+  },
+  whitelist: { ips: [], cidrs: [] },  // skip every check
+  blacklist: { ips: [], cidrs: [], statusCode: 403 },
+  userAgent: { block: [/curl/i], allow: [/googlebot/i], requirePresent: true },
+  burst: { maxConcurrent: 50 },
+  payload: { maxBodyBytes: 1_000_000, maxHeaderBytes: 16_384 },
+  slowDown: { delayAfter: 30, delayMs: (hit) => hit * 50, maxDelayMs: 2_000 },
+
+  // ---- extras -------------------------------------------------------------
+  skipPaths: ['/health', '/metrics*'], // ignored entirely. '*' at the end = prefix. [] disables the defaults
+  probes: true,                       // count scanner hits (true, or { paths: [...] })
+  rules: { load: async () => ({ blacklist: { ips: [...] } }), refreshMs: 30_000 },
+
+  // ---- observability ------------------------------------------------------
+  response: {
+    rateLimit429: { message: 'Slow down', code: 'RATE_LIMITED', includeRetryAfter: true },
+    blocked403:   { message: 'Forbidden', code: 'BLOCKED' },
+    payload413:   { message: 'Too large', code: 'TOO_LARGE' },
+    onReject: (req, res, info) => {},  // { layer, ip, reason, status, retryAfterMs? }
+  },
+  onEvent: (event) => {},             // reject, ban and unban events
+
+  admin: { attackModeFactor: 5, maxEvents: 500 },   // dashboard tuning
 });
 ```
 
-Per-process. Counters reset on restart. Fine for single-instance services.
+Every option has a short description in your editor too (hover over it).
 
-### Redis (multi-pod)
+---
+
+## Recipes
+
+### Use Redis (more than one server)
+
+Memory counters are per process and reset on restart. With several instances, use Redis so everyone shares limits and bans.
 
 ```ts
-import Redis from 'ioredis';
+ShieldModule.forRoot({ storage: { type: 'redis', url: process.env.REDIS_URL } });
+// or just set REDIS_URL and use ShieldModule.forEnv()
+```
 
+The library creates and closes the connection for you (needs `ioredis` installed). Already have a client? Pass `client: yourClient` instead of `url`. If Redis goes down, requests keep working on in-memory counters and a warning is logged at most every 30 seconds.
+
+### Change limits on one route
+
+```ts
+import { RateLimit, SkipShield, MaxPayload, UserAgentPolicy } from 'nestjs-shield';
+
+@Controller('auth')
+export class AuthController {
+  @Post('login')
+  @RateLimit({ limit: 5, ttl: 60_000 })            // stricter than the global limit
+  login() {}
+
+  @Post('upload')
+  @MaxPayload({ maxBodyBytes: 10_000_000 })
+  upload() {}
+
+  @Get('status')
+  @SkipShield()                                    // no checks at all
+  status() {}
+
+  @Get('feed')
+  @SkipShield('rate-limit', 'slow-down')           // skip only some layers
+  feed() {}
+}
+```
+
+Other decorators: `@Blacklist`, `@Whitelist`, `@SlowDown`, `@BurstLimit`, `@UserAgentPolicy`. They merge over the global config; anything you leave out falls back to it. They work on a method or a whole controller.
+
+### Catch vulnerability scanners
+
+Scanners request paths like `/.env` and `/wp-login.php` that your app has no route for, so no guard ever sees them. Turn on `probes` (it is on with `forEnv()`) and those hits count as violations; enough of them and the IP is banned. It needs `autoBan` and the Express adapter.
+
+```ts
 ShieldModule.forRoot({
-  storage: {
-    type: 'redis',
-    client: new Redis(process.env.REDIS_URL!),
-    keyPrefix: 'myapp',   // optional
+  autoBan: { threshold: 5, window: 60_000, banDuration: 600_000 },
+  probes: true,                                  // default list
+  // probes: { paths: ['/.env', /^\/wp-/, '/admin.php'] }   // or your own
+});
+```
+
+### Keep IP rules in your database
+
+```ts
+ShieldModule.forRootAsync({
+  imports: [DatabaseModule],
+  inject: [IpRulesRepository],
+  useFactory: (rules: IpRulesRepository) => ({
+    rules: {
+      refreshMs: 30_000,
+      load: async () => ({
+        whitelist: { ips: await rules.listIps('whitelist') },
+        blacklist: { ips: await rules.listIps('blacklist') },
+      }),
+    },
+  }),
+});
+```
+
+Loaded rules are added to any static `whitelist` and `blacklist`. If a reload fails the last good rules stay in place.
+
+### Ban or unban from your own code
+
+```ts
+import { ShieldService } from 'nestjs-shield';
+
+@Injectable()
+export class SecurityService {
+  constructor(private readonly shield: ShieldService) {}
+
+  block(ip: string) { return this.shield.ban(ip, 24 * 60 * 60 * 1000); }
+  release(ip: string) { return this.shield.unban(ip); }
+  isBlocked(ip: string) { return this.shield.isBanned(ip); }
+  list() { return this.shield.listBans(); }          // { supported, bans: [{ ip, expiresAt }] }
+  failedLogin(ip: string) { return this.shield.recordViolation(ip); }   // counts toward auto-ban
+}
+```
+
+### Share bans between several apps
+
+Keep bans in one Redis that all your services use, while each service keeps its own counters.
+
+```ts
+ShieldModule.forRoot({
+  storage: { type: 'redis', url: process.env.REDIS_URL },
+  banStorage: { type: 'redis', url: process.env.SHARED_REDIS_URL, keyPrefix: 'shared' },
+});
+```
+
+### Audit log and metrics
+
+```ts
+ShieldModule.forRoot({
+  onEvent: (event) => {
+    if (event.type === 'reject') metrics.increment('shield.reject', { layer: event.layer });
+    if (event.type === 'ban') audit.log(`banned ${event.ip} for ${event.durationMs}ms (${event.source})`);
   },
 });
 ```
 
-All algorithms use atomic Lua scripts loaded via `defineCommand`, so token-bucket math is race-free across pods on the same key.
+Events: `reject` (`ip`, `layer`, `reason`, `status`, `method`, `path`), `ban` (`ip`, `durationMs`, `source`: `auto`, `manual` or `probe`) and `unban`. The hook can throw without affecting requests.
 
-### Bring your own
+### Use it with a global auth guard
 
-Implement `ShieldStorage` (15 methods, all small) and pass it as `storage: yourAdapter`.
+The dashboard has its own login, so a global JWT or session guard must let it through. The dashboard controller is already marked public using the common metadata keys (`isPublic`, `IS_PUBLIC_KEY`, `IS_PUBLIC`, `is_public`, `public`, `skipAuth`). If your guard uses a different mechanism, check the request:
 
-## Standard headers
+```ts
+import { ShieldAdmin } from 'nestjs-shield';
 
-Default is RFC draft-7:
+canActivate(context) {
+  const req = context.switchToHttp().getRequest();
+  if (ShieldAdmin.isAdminRequest(req)) return true;
+  // ...your normal checks
+}
+```
 
-```http
+### Per-API-key limits
+
+```ts
+rateLimit: { limit: 1000, ttl: 60_000, keyBy: { header: 'x-api-key' } }   // falls back to the IP when the header is missing
+```
+
+---
+
+## Admin dashboard
+
+A live dashboard ships inside the package: traffic charts, blocked requests by layer, top paths and clients, response status mix, latency, active bans, and a live request feed. You can change limits, edit IP rules, ban or unban addresses and switch on **under attack mode** without redeploying.
+
+Turn it on with environment variables:
+
+```env
+SHIELD_DASH=true
+SHIELD_ADMIN_USER=admin
+SHIELD_ADMIN_PASSWORD=use-a-long-random-password
+```
+
+Open `/shield/admin` (or `/api/shield/admin` if you use `app.setGlobalPrefix('api')`). It is a 404 unless `SHIELD_DASH=true`.
+
+- **Overview**: requests, block rate, requests per minute, p95 latency, a 30-minute traffic chart, blocked requests by layer, status mix, top paths and top clients (with one-click ban).
+- **Controls**: shield on/off, under attack mode (divides the rate limit by `admin.attackModeFactor`, blocks empty and bot-like user agents, tightens auto-ban), rate limit, auto-ban, whitelist and blacklist, manual bans.
+- **Live traffic**: every request with the decision, layer, status and latency, with filters.
+
+Good to know:
+
+- Changes are saved in the shield storage and override your code config. With Redis they are shared by every instance within about 2 seconds and survive restarts. With memory storage they reset on restart. "Reset all overrides" returns to your code config.
+- The traffic feed and charts are kept in memory per instance (last 500 requests, `admin.maxEvents`).
+- Listing bans needs a storage that can scan keys (memory and Redis can).
+- Logins use a signed, `HttpOnly`, `SameSite=Strict` cookie (8 hours), failed logins are throttled per IP, and changes require a CSRF header. The dashboard skips the shield itself, so you cannot lock yourself out. Serve it over HTTPS.
+- With a global prefix it works both ways: `setGlobalPrefix('api')` serves it at `/api/shield/admin`. To serve it without the prefix use `setGlobalPrefix('api', { exclude: ['shield/admin', 'shield/admin/{*path}'] })` (NestJS 11 and 12 syntax; on NestJS 10 and below use `'shield/admin(.*)'`).
+- If you use a reverse proxy that only routes certain paths to your API, make sure `/shield/admin` (or `/api/...`) reaches it.
+
+---
+
+## Reference
+
+### Algorithms
+
+All five share the same `{ limit, ttl }` settings, so changing one is a one-line edit.
+
+| Algorithm | Storage per client | Behaviour | Use when |
+| --- | --- | --- | --- |
+| `token-bucket` (default) | 2 numbers | Allows a burst up to `limit`, then refills steadily | Most APIs |
+| `sliding-window` | 2 counters | No double-burst at window edges | Fairness matters, storage is precious |
+| `sliding-window-log` | a sorted set | Exact | Strict rules at modest scale |
+| `fixed-window` | 1 counter | Up to 2x at a window boundary | Cheapest, huge scale |
+| `leaky-bucket` | 2 numbers | Very smooth output | Traffic shaping |
+
+### Response headers
+
+Default is the IETF draft-7 style:
+
+```text
 RateLimit-Limit: 60
 RateLimit-Remaining: 41
 RateLimit-Reset: 23
 RateLimit-Policy: 60;w=23
 ```
 
-On 429, also `Retry-After: <seconds>`. Switch to draft-6 (`X-RateLimit-*`) with `rateLimit.standardHeaders = 'draft-6'`.
+Rejected requests also get `Retry-After: <seconds>`. Use `standardHeaders: 'draft-6'` for `X-RateLimit-*`.
 
-## Auto-ban
+### Errors
 
-Every 429/403 emitted by the rate-limit, blacklist, or UA layer increments a violation counter for the offending IP, scoped by `autoBan.window`. When the counter crosses `autoBan.threshold`, the IP is placed in a temporary ban for `autoBan.banDuration`. If `escalate: true` (default), each subsequent ban doubles the previous duration.
+Rejections are normal NestJS exceptions (`ShieldRateLimitException` 429, `ShieldBlockedException` 403, `ShieldPayloadException` 413), so your exception filters see them. The body includes `statusCode`, `code`, `message`, `layer` and `retryAfter`. Customise text and codes with `response`.
 
-Subsequent requests from a banned IP are rejected via a cheap `GET` on a `shield:ban:<ip>` key before any other check runs.
+### Public API
 
-## Slow-down
+| Export | Use |
+| --- | --- |
+| `ShieldModule.forEnv / forRoot / forRootAsync` | Register the module |
+| `Shield.applyTo(app, config)` | Middleware style registration |
+| `ShieldService` | Ban, unban, list bans, record violations, resolve IPs |
+| `ShieldEngine` | Low-level pipeline (`SHIELD_ENGINE` token) |
+| `@RateLimit @SkipShield @Blacklist @Whitelist @SlowDown @MaxPayload @BurstLimit @UserAgentPolicy` | Per-route overrides |
+| `MemoryStorage`, `RedisStorage`, `ShieldStorage` | Storage implementations and the interface for your own |
+| `ShieldAdmin.isAdminRequest(req)` | Detect dashboard requests in custom guards |
+| `KEY_BAN`, `KEY_BAN_COUNT`, `KEY_VIOLATIONS`, `DEFAULT_SKIP_PATHS`, `DEFAULT_PROBE_PATHS` | Constants |
 
-After `slowDown.delayAfter` requests in the rate-limit window, additional requests get an artificial delay computed from `delayMs` (number or function of the over-count), capped by `maxDelayMs`. The hard rate-limit still applies — slow-down only smooths approach to the cliff.
+### Bring your own storage
 
-## Behind a proxy
+Implement `ShieldStorage` (about 15 small methods) and pass it as `storage: yourAdapter`. Add `scan(prefix, limit)` if you want the dashboard to list bans.
 
-```ts
-ShieldModule.forRoot({
-  trustProxy: 1,     // trust 1 hop — picks XFF[length - 2]
-});
-```
+---
 
-Or provide a custom `ipResolver`. For Cloudflare, pulling `cf-connecting-ip` is a one-liner.
+## Troubleshooting
 
-## Observability
+**Everyone gets rate limited together, or my own IP shows as the proxy's.**
+You are behind a proxy and `trustProxy` is not set. See [Behind a proxy](#behind-a-proxy-do-this-first).
 
-```ts
-response: {
-  onReject: (req, res, info) => {
-    metrics.increment('shield.reject', { layer: info.layer, status: info.status });
-  },
-},
-```
+**The dashboard returns 404.**
+`SHIELD_DASH` is not exactly `true`, or your proxy does not route the path to the API. With `setGlobalPrefix('api')` the path is `/api/shield/admin`.
 
-`info` is `{ layer, ip, reason, status, retryAfterMs? }`. The hook is wrapped in try/catch and never breaks the pipeline.
+**The dashboard shows a configuration error.**
+`SHIELD_ADMIN_USER` and `SHIELD_ADMIN_PASSWORD` are both required.
 
-## Admin dashboard
+**The server crashes at startup with a path-to-regexp error after I excluded the dashboard from the prefix.**
+NestJS 11 and 12 need `'shield/admin/{*path}'`, not `'shield/admin(.*)'`.
 
-A light, dependency-free dashboard is served at `/shield/admin` by `ShieldModule`. It is off unless you enable it in your environment:
+**My global auth guard blocks the dashboard.**
+See [Use it with a global auth guard](#use-it-with-a-global-auth-guard).
 
-```env
-SHIELD_DASH=true
-SHIELD_ADMIN_USER=admin
-SHIELD_ADMIN_PASSWORD=change-me
-# optional, signs the session cookie (defaults to a key derived from the credentials)
-SHIELD_ADMIN_SECRET=
-```
+**Scanner hits are not counted.**
+`probes` needs `autoBan` and the Express adapter. Hits are only counted for paths with no matching route.
 
-- `SHIELD_DASH` unset or not `true`: every dashboard route returns 404.
-- `SHIELD_DASH=true` without `SHIELD_ADMIN_USER` and `SHIELD_ADMIN_PASSWORD`: the page shows a configuration error and login is disabled.
-- Login uses a signed, `HttpOnly`, `SameSite=Strict` cookie (8h), failed logins are throttled per IP, and mutating calls require a CSRF header.
-- The dashboard routes skip the shield themselves, so you cannot lock yourself out with a rate limit. Put it behind HTTPS or a VPN anyway.
+**Limits reset when I redeploy.**
+You are on memory storage. Use Redis.
 
-What you can do:
+**Redis went down and I saw a warning.**
+Expected: the shield switched to in-memory counters for that period and recovers on its own. Set `failOpen: false` on the Redis storage if you would rather fail requests.
 
-- Turn the shield on or off.
-- Under attack mode: divides the rate limit by `admin.attackModeFactor` (default 5), blocks empty and bot-like user-agents, and halves the auto-ban threshold.
-- Edit the rate limit, auto-ban settings, whitelist and blacklist.
-- List, add and remove IP bans.
-- Watch live traffic: incoming requests with the shield's decision, and the response status and latency.
+**Fastify.**
+The core guard works on any adapter, but `probes` and the dashboard cookie handling have only been verified on Express.
 
-Changes are saved in shield storage (key `shield:admin:overrides`) and override your `forRoot` config. Every instance re-reads them every 2 seconds, so with Redis storage they are shared and survive restarts. With memory storage they reset on restart. "Reset all overrides" returns to your code config.
-
-The live traffic feed is kept in memory per instance (last 500 requests, `admin.maxEvents`). Listing bans needs a storage with `scan` (Memory and Redis have it; custom storages can add it).
-
-```ts
-ShieldModule.forRoot({
-  admin: { attackModeFactor: 5, maxEvents: 500 },
-});
-```
-
-The dashboard lives at `/shield/admin` and needs `ShieldModule` (`Shield.applyTo` alone does not serve it). It also works under `app.setGlobalPrefix`: with `setGlobalPrefix('api')` it is served at `/api/shield/admin` and the session cookie is scoped to that mount path. To serve it without the prefix, exclude it with `setGlobalPrefix('api', { exclude: ['shield/admin', 'shield/admin/{*path}'] })` (NestJS 11 syntax; on NestJS 10 and below use `shield/admin(.*)`).
+---
 
 ## Example
 
-A runnable end-to-end example lives in [`example/`](./example) — see its README.
+A runnable end-to-end example is in [`example/`](example/README.md).
 
-## Publishing
+## Publishing (for maintainers)
 
-This repo publishes to two registries with one workflow ([.github/workflows/publish.yml](.github/workflows/publish.yml)):
+This repo publishes to two registries from one workflow (`.github/workflows/publish.yml`), on a published GitHub release, on `v*.*.*` tags, or by manual dispatch.
 
-| Registry | Name there | Auth |
+| Registry | Name | Auth |
 | --- | --- | --- |
-| npm public (`registry.npmjs.org`) | `nestjs-shield` | `NPM_TOKEN` repo secret |
-| GitHub Packages (`npm.pkg.github.com`) | `@yassinos-coder/nestjs-shield` | auto `GITHUB_TOKEN` |
+| npm (public) | `nestjs-shield` | `NPM_TOKEN` repository secret (an automation token, so 2FA does not block CI) |
+| GitHub Packages | `@yassinos-coder/nestjs-shield` | automatic `GITHUB_TOKEN` |
 
-The workflow runs on each published GitHub Release, on pushes of `v*.*.*` tags, and via manual dispatch (where you can pick `npm`, `github`, or `both`). The GitHub Packages job renames the package on the fly with `npm pkg set name=@yassinos-coder/nestjs-shield` so the same source tree maps cleanly to both registries.
+To use the GitHub Packages build, map the scope in a project `.npmrc`:
 
-### One-time setup
-
-1. **`NPM_TOKEN` repo secret** — required only for the npm public job.
-   - Go to [npmjs.com → Access Tokens](https://www.npmjs.com/settings/yassinoscoder/tokens) → *Generate New Token* → *Classic Token* → *Automation* (skips 2FA).
-   - In the GitHub repo: *Settings → Secrets and variables → Actions → New repository secret* → name `NPM_TOKEN`, paste the token.
-2. **`GITHUB_TOKEN`** — nothing to do. GitHub Actions provides this automatically.
-
-### Releasing
-
-```bash
-# bump version + tag
-npm version 1.0.1
-git push --follow-tags
+```ini
+@yassinos-coder:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
 ```
 
-Or create a GitHub Release from the UI — the workflow fires on `release: published` too.
-
-### Manual local publish (alternative)
-
-If you'd rather publish from your machine instead of CI:
-
-```bash
-# npm public
-npm login              # browser flow
-npm publish --access public
-
-# GitHub Packages — needs a PAT with write:packages
-echo "//npm.pkg.github.com/:_authToken=ghp_xxx" >> ~/.npmrc
-npm pkg set name=@yassinos-coder/nestjs-shield
-npm publish --registry=https://npm.pkg.github.com --access public
-npm pkg set name=nestjs-shield   # revert
-```
+Manual publish from a machine: `npm login`, then `npm publish --access public`.
 
 ## License
 

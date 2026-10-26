@@ -1,4 +1,4 @@
-import { Inject, Injectable, Optional } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { SHIELD_RUNTIME } from './admin/constants/admin.constants';
 import type { ShieldRuntime } from './admin/interfaces';
 import { AdminDecisionMapper } from './admin/mappers/admin-decision.mapper';
@@ -16,6 +16,7 @@ import {
   ShieldRateLimitException,
 } from './exceptions/shield.exceptions';
 import {
+  DEFAULT_SKIP_PATHS,
   SHIELD_CONFIG,
   SHIELD_STORAGE,
   ShieldLayer,
@@ -27,8 +28,10 @@ import type {
   ShieldConfig,
 } from './shield.types';
 import type { ShieldStorage } from './storage/shield-storage.interface';
+import { EventUtil } from './utils/event.util';
 import { HeadersUtil } from './utils/headers.util';
 import { IpUtil } from './utils/ip.util';
+import { PathUtil } from './utils/path.util';
 import { UaUtil } from './utils/ua.util';
 
 export interface EngineDecision {
@@ -42,6 +45,8 @@ export interface EngineDecision {
 @Injectable()
 export class ShieldEngine {
   private bannerShown = false;
+  private proxyHintShown = false;
+  private readonly logger = new Logger('Shield');
 
   constructor(
     @Inject(SHIELD_CONFIG) private readonly config: ShieldConfig,
@@ -66,7 +71,18 @@ export class ShieldEngine {
   resolveIp(req: AnyRequest): string {
     return this.config.ipResolver
       ? this.config.ipResolver(req)
-      : IpUtil.resolve(req, this.config.trustProxy);
+      : IpUtil.resolve(req, this.config.trustProxy, this.config.ipHeader);
+  }
+
+  isSkippedPath(req: AnyRequest): boolean {
+    const patterns = this.config.skipPaths ?? DEFAULT_SKIP_PATHS;
+    return patterns.length > 0 && PathUtil.matches(PathUtil.of(req.url), patterns);
+  }
+
+  async recordViolation(ip: string, config: ShieldConfig): Promise<void> {
+    const durationMs = await AutoBanCheck.recordViolation(this.storage, ip, config.autoBan);
+    if (durationMs === null) return;
+    EventUtil.emit(this.config.onEvent, { type: 'ban', at: Date.now(), ip, durationMs, source: 'auto' });
   }
 
   async run(
@@ -74,6 +90,8 @@ export class ShieldEngine {
     res: AnyResponse,
     overrides: DecoratorOverrides = {},
   ): Promise<EngineDecision> {
+    if (this.isSkippedPath(req)) return { allowed: true, ip: '' };
+
     const runtime = this.runtime?.isActive() ? this.runtime : undefined;
     const config = runtime ? runtime.effectiveConfig(this.config) : this.config;
 
@@ -92,6 +110,7 @@ export class ShieldEngine {
     if (config.enabled === false) return { allowed: true, ip: checkManualBans ? this.resolveIp(req) : '' };
 
     const ip = this.resolveIp(req);
+    this.hintBehindProxy(req, ip);
 
     if (overrides.skip === true) return { allowed: true, ip };
     const skipSet = new Set<ShieldLayer>(Array.isArray(overrides.skip) ? overrides.skip : []);
@@ -106,7 +125,7 @@ export class ShieldEngine {
     if (!skipSet.has('blacklist')) {
       const bl = BlacklistCheck.run(ip, blacklist);
       if (!bl.allowed) {
-        await AutoBanCheck.recordViolation(this.storage, ip, config.autoBan);
+        await this.recordViolation(ip, config);
         this.notifyReject(req, res, ip, bl.layer ?? 'blacklist', bl.reason ?? 'blocked', bl.status ?? 403);
         return {
           allowed: false,
@@ -146,7 +165,7 @@ export class ShieldEngine {
     if (!skipSet.has('user-agent')) {
       const uaOut = UserAgentCheck.run(ua, userAgent);
       if (!uaOut.allowed) {
-        await AutoBanCheck.recordViolation(this.storage, ip, config.autoBan);
+        await this.recordViolation(ip, config);
         this.notifyReject(req, res, ip, 'user-agent', uaOut.reason ?? 'blocked', 403);
         return {
           allowed: false,
@@ -217,7 +236,7 @@ export class ShieldEngine {
         if (config.response?.rateLimit429?.includeRetryAfter !== false && rl.retryAfterMs) {
           HeadersUtil.writeRetryAfter(res, rl.retryAfterMs);
         }
-        await AutoBanCheck.recordViolation(this.storage, ip, config.autoBan);
+        await this.recordViolation(ip, config);
         if (release) await release();
         this.notifyReject(req, res, ip, 'rate-limit', rl.reason ?? 'rate limited', 429, rl.retryAfterMs);
         return {
@@ -288,6 +307,16 @@ export class ShieldEngine {
     status: number,
     retryAfterMs?: number,
   ): void {
+    EventUtil.emit(this.config.onEvent, {
+      type: 'reject',
+      at: Date.now(),
+      ip,
+      layer,
+      reason,
+      status,
+      method: req.method ?? 'GET',
+      path: PathUtil.of(req.url),
+    });
     const hook = this.config.response?.onReject;
     if (!hook) return;
     try {
@@ -295,5 +324,18 @@ export class ShieldEngine {
     } catch {
       // observability hook must never break the pipeline
     }
+  }
+
+  private hintBehindProxy(req: AnyRequest, ip: string): void {
+    if (this.proxyHintShown) return;
+    if (this.config.trustProxy || this.config.ipResolver || this.config.ipHeader) return;
+    if (!IpUtil.isPrivate(ip)) return;
+    const forwarded = req.headers['x-forwarded-for'] ?? req.headers['cf-connecting-ip'];
+    if (!forwarded) return;
+    this.proxyHintShown = true;
+    this.logger.warn(
+      `Requests are arriving through a proxy (${ip}) but trustProxy is not set, so every visitor shares one rate limit. ` +
+        `Set trustProxy: 'cloudflare' (Cloudflare, Railway, Render) or trustProxy: 1 (one proxy hop).`,
+    );
   }
 }

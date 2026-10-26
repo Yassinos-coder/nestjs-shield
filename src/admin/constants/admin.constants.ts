@@ -22,6 +22,7 @@ export const LOGIN_MAX_TRACKED = 1_000;
 export const DEFAULT_MAX_EVENTS = 500;
 export const MAX_EVENTS_PER_POLL = 200;
 export const STATS_MINUTES = 30;
+export const TOP_ENTRIES = 8;
 export const MAX_PATH_LENGTH = 300;
 export const MAX_UA_LENGTH = 200;
 
@@ -47,3 +48,5 @@ export const RATE_LIMIT_ALGORITHMS = [
   'fixed-window',
   'leaky-bucket',
 ] as const;
+
+export const PUBLIC_METADATA_KEYS = ['isPublic', 'IS_PUBLIC_KEY', 'IS_PUBLIC', 'is_public', 'public', 'skipAuth'];

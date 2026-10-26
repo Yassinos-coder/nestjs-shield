@@ -7,12 +7,15 @@ import {
   MAX_PATH_LENGTH,
   MAX_UA_LENGTH,
   STATS_MINUTES,
+  TOP_ENTRIES,
 } from '../constants/admin.constants';
 import type {
   AdminDecision,
   AdminEvent,
+  AdminLatency,
   AdminMinuteBucket,
   AdminStats,
+  AdminTopEntry,
 } from '../interfaces';
 import { AdminHttpUtil } from '../utils/admin-http.util';
 import { AdminRequestValidator } from '../validators/admin-request.validator';
@@ -55,6 +58,9 @@ export class RequestLogService {
       byLayer: { ...this.byLayer },
       byStatusClass: { ...this.byStatusClass },
       minutes: this.collectMinutes(),
+      topPaths: this.top((event) => event.path),
+      topIps: this.top((event) => event.ip),
+      latency: this.latency(),
     };
   }
 
@@ -81,13 +87,13 @@ export class RequestLogService {
     this.countDecision(event);
 
     if (typeof res.on !== 'function') {
-      this.countStatus(event.status);
+      this.countStatus(event);
       return;
     }
     res.on('finish', () => {
       event.status = res.statusCode ?? event.status;
       event.durationMs = Date.now() - startedAt;
-      this.countStatus(event.status);
+      this.countStatus(event);
     });
   }
 
@@ -105,17 +111,27 @@ export class RequestLogService {
     }
 
     const minute = Math.floor(event.at / 60_000);
-    const bucket = this.minutes.get(minute) ?? { minute, total: 0, rejected: 0 };
+    const bucket = this.minutes.get(minute) ?? this.emptyBucket(minute);
     bucket.total += 1;
     if (!event.allowed) bucket.rejected += 1;
     this.minutes.set(minute, bucket);
     this.pruneMinutes(minute);
   }
 
-  private countStatus(status: number | undefined): void {
+  private countStatus(event: AdminEvent): void {
+    const status = event.status;
     if (!status) return;
     const key = `${Math.floor(status / 100)}xx`;
     this.byStatusClass[key] = (this.byStatusClass[key] ?? 0) + 1;
+
+    const bucket = this.minutes.get(Math.floor(event.at / 60_000));
+    if (!bucket) return;
+    if (status >= 500) bucket.serverErrors += 1;
+    else if (status >= 400) bucket.clientErrors += 1;
+    if (event.durationMs !== undefined) {
+      bucket.latencySum += event.durationMs;
+      bucket.latencyCount += 1;
+    }
   }
 
   private pruneMinutes(current: number): void {
@@ -129,8 +145,41 @@ export class RequestLogService {
     const current = Math.floor(Date.now() / 60_000);
     const out: AdminMinuteBucket[] = [];
     for (let minute = current - STATS_MINUTES + 1; minute <= current; minute++) {
-      out.push(this.minutes.get(minute) ?? { minute, total: 0, rejected: 0 });
+      out.push(this.minutes.get(minute) ?? this.emptyBucket(minute));
     }
     return out;
+  }
+
+  private emptyBucket(minute: number): AdminMinuteBucket {
+    return { minute, total: 0, rejected: 0, clientErrors: 0, serverErrors: 0, latencySum: 0, latencyCount: 0 };
+  }
+
+  private top(keyOf: (event: AdminEvent) => string): AdminTopEntry[] {
+    const entries = new Map<string, AdminTopEntry>();
+    for (const event of this.events) {
+      const key = keyOf(event);
+      const entry = entries.get(key) ?? { key, count: 0, rejected: 0 };
+      entry.count += 1;
+      if (!event.allowed) entry.rejected += 1;
+      entries.set(key, entry);
+    }
+    return [...entries.values()].sort((a, b) => b.count - a.count).slice(0, TOP_ENTRIES);
+  }
+
+  private latency(): AdminLatency {
+    const samples = this.events
+      .map((event) => event.durationMs)
+      .filter((value): value is number => value !== undefined)
+      .sort((a, b) => a - b);
+    if (!samples.length) return { samples: 0, avg: 0, p50: 0, p95: 0, max: 0 };
+    const at = (ratio: number): number => samples[Math.min(samples.length - 1, Math.floor(samples.length * ratio))];
+    const sum = samples.reduce((total, value) => total + value, 0);
+    return {
+      samples: samples.length,
+      avg: Math.round(sum / samples.length),
+      p50: at(0.5),
+      p95: at(0.95),
+      max: samples[samples.length - 1],
+    };
   }
 }

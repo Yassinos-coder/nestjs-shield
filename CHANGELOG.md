@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-10-26
+
+### Added
+
+- Redesigned admin dashboard: Overview, Controls and Live traffic tabs, KPI cards with sparklines, a 30-minute traffic chart, blocked-by-layer bars, a response-status donut, top paths and top clients (with one-click ban), latency p50/p95, toast feedback, and a light/dark theme toggle. Works on phones.
+- `ShieldModule.forEnv()`: zero-config setup from `SHIELD_*` environment variables (limit, window, algorithm, auto-ban, burst, body size, proxy, probes, skip paths) and `REDIS_URL`.
+- `trustProxy: 'cloudflare'` (Cloudflare, Railway, Render) and `ipHeader` for platforms with their own client-IP header. A one-time warning is logged when requests arrive through a proxy with `trustProxy` unset.
+- `storage: { type: 'redis', url }`: the library creates and closes the Redis connection. Redis failures now fail open to in-memory counters (opt out with `failOpen: false`).
+- `ShieldService`, a public injectable API: `ban`, `unban`, `isBanned`, `listBans`, `recordViolation`, `resolveIp`. Key constants (`KEY_BAN`, ...) are exported, so deep imports from `dist` are no longer needed.
+- `skipPaths` option; health checks (`/health`, `/healthz`, `/livez`, `/readyz`, `/api/health`) are skipped by default.
+- `probes` option: requests to scanner paths (`/.env`, `/wp-login.php`, ...) that match no route now count toward auto-ban (Express adapter).
+- `rules.load`: load whitelist and blacklist from a database or API and keep them refreshed, merged with the static lists.
+- `banStorage`: keep bans in a different store than counters, to share bans between services.
+- `onEvent` hook for `reject`, `ban` and `unban` events (audit logs, metrics).
+- `ShieldAdmin.isAdminRequest(req)` for custom guards, and the dashboard controller is marked public under the common metadata keys so global auth guards let its own login through.
+
+### Changed
+
+- README rewritten: quick start first, proxy setup, layer overview, full option reference, recipes, dashboard guide and troubleshooting. Public config options now carry editor doc comments.
+- Dashboard stats now include per-minute 4xx/5xx counts and latency, top paths and clients, and latency percentiles (from the last 500 requests).
+- Storage creation is shared by `ShieldModule` and `Shield.applyTo`; the module's provider setup is consolidated.
+
 ## [1.2.1] - 2026-10-05
 
 ### Fixed

@@ -1,4 +1,5 @@
 import {
+  applyDecorators,
   Body,
   Controller,
   Delete,
@@ -10,12 +11,13 @@ import {
   Query,
   Req,
   Res,
+  SetMetadata,
   UseGuards,
 } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { SkipShield } from '../../decorators/skip-shield.decorator';
 import type { AnyRequest, AnyResponse } from '../../shield.types';
-import { ADMIN_BASE_PATH } from '../constants/admin.constants';
+import { ADMIN_BASE_PATH, PUBLIC_METADATA_KEYS } from '../constants/admin.constants';
 import { AdminSessionGuard } from '../guards/admin-session.guard';
 import type {
   AdminBanList,
@@ -31,7 +33,10 @@ import { renderDashboardPage } from '../views/dashboard.html';
 import { renderErrorPage } from '../views/error.html';
 import { renderLoginPage } from '../views/login.html';
 
+const MarkPublic = () => applyDecorators(...PUBLIC_METADATA_KEYS.map((key) => SetMetadata(key, true)));
+
 @SkipShield()
+@MarkPublic()
 @Controller(ADMIN_BASE_PATH)
 export class ShieldAdminController {
   constructor(

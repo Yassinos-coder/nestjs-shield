@@ -19,6 +19,8 @@ export const KEY_BAN_COUNT = `${KEY_PREFIX}:ban-count`;
 export const KEY_BURST = `${KEY_PREFIX}:burst`;
 export const KEY_SLOW_DOWN = `${KEY_PREFIX}:sd`;
 
+export const DEFAULT_SKIP_PATHS = ['/health', '/healthz', '/livez', '/readyz', '/api/health'];
+
 export const DEFAULT_MEMORY_MAX_KEYS = 100_000;
 export const DEFAULT_HEADERS_STANDARD = 'draft-7' as const;
 

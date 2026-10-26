@@ -53,6 +53,24 @@ export interface AdminMinuteBucket {
   minute: number;
   total: number;
   rejected: number;
+  clientErrors: number;
+  serverErrors: number;
+  latencySum: number;
+  latencyCount: number;
+}
+
+export interface AdminTopEntry {
+  key: string;
+  count: number;
+  rejected: number;
+}
+
+export interface AdminLatency {
+  samples: number;
+  avg: number;
+  p50: number;
+  p95: number;
+  max: number;
 }
 
 export interface AdminStats {
@@ -62,6 +80,9 @@ export interface AdminStats {
   byLayer: Record<string, number>;
   byStatusClass: Record<string, number>;
   minutes: AdminMinuteBucket[];
+  topPaths: AdminTopEntry[];
+  topIps: AdminTopEntry[];
+  latency: AdminLatency;
 }
 
 export interface AdminBan {

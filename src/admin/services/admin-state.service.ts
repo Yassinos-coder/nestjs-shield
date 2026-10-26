@@ -1,16 +1,15 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { SHIELD_CONFIG, SHIELD_STORAGE, KEY_BAN } from '../../shield.constants';
+import { SHIELD_CONFIG, SHIELD_STORAGE } from '../../shield.constants';
+import { ShieldService } from '../../shield.service';
 import type { ShieldConfig } from '../../shield.types';
 import type { ShieldStorage } from '../../storage/shield-storage.interface';
 import {
   DEFAULT_ATTACK_FACTOR,
   KEY_ADMIN_OVERRIDES,
-  MAX_BAN_SCAN,
   OVERRIDES_REFRESH_MS,
   OVERRIDES_TTL_MS,
 } from '../constants/admin.constants';
 import type {
-  AdminBan,
   AdminBanList,
   AdminOverrides,
   AdminSettings,
@@ -33,6 +32,7 @@ export class AdminStateService implements OnModuleInit {
   constructor(
     @Inject(SHIELD_CONFIG) private readonly config: ShieldConfig,
     @Inject(SHIELD_STORAGE) private readonly storage: ShieldStorage,
+    private readonly shield: ShieldService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -73,27 +73,16 @@ export class AdminStateService implements OnModuleInit {
     return AdminConfigMapper.toSettings(this.config, this.overrides);
   }
 
-  async listBans(): Promise<AdminBanList> {
-    if (typeof this.storage.scan !== 'function') return { supported: false, bans: [] };
-    const keys = await this.storage.scan(`${KEY_BAN}:`, MAX_BAN_SCAN);
-    const bans: AdminBan[] = [];
-    for (const key of keys) {
-      const raw = await this.storage.get(key);
-      const expiresAt = Number(raw);
-      if (!raw || !(expiresAt > Date.now())) continue;
-      bans.push({ ip: key.slice(KEY_BAN.length + 1), expiresAt });
-    }
-    bans.sort((a, b) => a.expiresAt - b.expiresAt);
-    return { supported: true, bans };
+  listBans(): Promise<AdminBanList> {
+    return this.shield.listBans();
   }
 
-  async ban(ip: string, minutes: number): Promise<void> {
-    const ttlMs = minutes * 60_000;
-    await this.storage.set(`${KEY_BAN}:${ip}`, String(Date.now() + ttlMs), ttlMs);
+  ban(ip: string, minutes: number): Promise<void> {
+    return this.shield.ban(ip, minutes * 60_000);
   }
 
-  async unban(ip: string): Promise<void> {
-    await this.storage.delete(`${KEY_BAN}:${ip}`);
+  unban(ip: string): Promise<void> {
+    return this.shield.unban(ip);
   }
 
   async update(patch: AdminOverrides): Promise<void> {

@@ -2,6 +2,7 @@ export { ShieldModule } from './shield.module';
 export type { ShieldAsyncOptions } from './shield.module';
 export { ShieldEngine } from './shield.engine';
 export { ShieldGuard } from './shield.guard';
+export { ShieldService } from './shield.service';
 export { Shield } from './apply-to';
 export type { NestAppLike } from './apply-to';
 
@@ -10,6 +11,10 @@ export {
   SHIELD_ENGINE,
   SHIELD_STORAGE,
   ALL_LAYERS,
+  DEFAULT_SKIP_PATHS,
+  KEY_BAN,
+  KEY_BAN_COUNT,
+  KEY_VIOLATIONS,
 } from './shield.constants';
 export type { ShieldLayer } from './shield.constants';
 
@@ -27,6 +32,14 @@ export type {
   PayloadConfig,
   ResponseConfig,
   StorageOption,
+  RedisStorageOption,
+  TrustProxyOption,
+  ProbeConfig,
+  RulesConfig,
+  RulesSnapshot,
+  ShieldEvent,
+  ShieldBan,
+  ShieldBanList,
   RejectInfo,
   DecoratorOverrides,
   AnyRequest,
@@ -67,6 +80,9 @@ export {
 } from './exceptions/shield.exceptions';
 
 export type { AdminOptions, AdminOverrides, AdminEvent, AdminStats } from './admin/interfaces';
+
+export { DEFAULT_PROBE_PATHS } from './probes/probe.constants';
+export { AdminRequestValidator as ShieldAdmin } from './admin/validators/admin-request.validator';
 
 export { IpUtil } from './utils/ip.util';
 export { HeadersUtil } from './utils/headers.util';

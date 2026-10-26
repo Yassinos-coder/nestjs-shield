@@ -33,11 +33,11 @@ export class AutoBanCheck {
     storage: ShieldStorage,
     ip: string,
     config?: AutoBanConfig,
-  ): Promise<void> {
-    if (!config) return;
+  ): Promise<number | null> {
+    if (!config) return null;
     const violationsKey = `${KEY_VIOLATIONS}:${ip}`;
     const { count } = await storage.increment(violationsKey, config.window);
-    if (count < config.threshold) return;
+    if (count < config.threshold) return null;
 
     const banCountKey = `${KEY_BAN_COUNT}:${ip}`;
     const banCountResult = await storage.increment(banCountKey, config.banDuration * 16);
@@ -49,5 +49,6 @@ export class AutoBanCheck {
     const expiresAt = Date.now() + duration;
     await storage.set(`${KEY_BAN}:${ip}`, String(expiresAt), duration);
     await storage.delete(violationsKey);
+    return duration;
   }
 }

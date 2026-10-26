@@ -9,6 +9,11 @@ export class AdminRequestValidator {
     return AdminRequestValidator.mountIndex(url.split('?')[0]) !== -1;
   }
 
+  static isAdminRequest(req: AnyRequest): boolean {
+    const url = typeof req.originalUrl === 'string' ? req.originalUrl : req.url;
+    return AdminRequestValidator.isAdminPath(url);
+  }
+
   static mountPath(req: AnyRequest): string {
     const raw = typeof req.originalUrl === 'string' ? req.originalUrl : req.url;
     if (!raw) return ADMIN_URL_PREFIX;

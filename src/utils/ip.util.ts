@@ -1,8 +1,20 @@
 import * as ipaddr from 'ipaddr.js';
-import type { AnyRequest } from '../shield.types';
+import { isIP } from 'node:net';
+import type { AnyRequest, TrustProxyOption } from '../shield.types';
+
+const CLOUDFLARE_HEADER = 'cf-connecting-ip';
+const PRIVATE_RANGES = new Set(['private', 'loopback', 'uniqueLocal', 'linkLocal', 'carrierGradeNat', 'unspecified']);
 
 export class IpUtil {
-  static resolve(req: AnyRequest, trustProxy: boolean | number = false): string {
+  static resolve(req: AnyRequest, trustProxy: TrustProxyOption = false, ipHeader?: string): string {
+    const fromHeader = IpUtil.validHeader(req, ipHeader);
+    if (fromHeader) return fromHeader;
+
+    if (trustProxy === 'cloudflare') {
+      const cloudflare = IpUtil.validHeader(req, CLOUDFLARE_HEADER);
+      return cloudflare ?? IpUtil.resolve(req, true);
+    }
+
     const xff = req.headers['x-forwarded-for'];
     if (trustProxy && xff) {
       const list = Array.isArray(xff) ? xff.join(',') : String(xff);
@@ -23,6 +35,21 @@ export class IpUtil {
     const direct =
       req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || '0.0.0.0';
     return IpUtil.normalize(direct);
+  }
+
+  static isPrivate(ip: string): boolean {
+    try {
+      return PRIVATE_RANGES.has(ipaddr.parse(ip).range());
+    } catch {
+      return false;
+    }
+  }
+
+  private static validHeader(req: AnyRequest, name?: string): string | null {
+    if (!name) return null;
+    const raw = req.headers[name.toLowerCase()];
+    const value = IpUtil.normalize(Array.isArray(raw) ? (raw[0] ?? '') : (raw ?? ''));
+    return isIP(value) !== 0 ? value : null;
   }
 
   static normalize(addr: string): string {
