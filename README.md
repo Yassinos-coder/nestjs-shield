@@ -451,6 +451,9 @@ See [Use it with a global auth guard](#use-it-with-a-global-auth-guard).
 **Scanner hits are not counted.**
 `probes` needs `autoBan` and the Express adapter. Hits are only counted for paths with no matching route.
 
+**A ban I made does not show up in the Bans list.**
+Update to 1.3.1 or later. Older versions could not list bans when your ioredis client was created with its own `keyPrefix` option. A custom storage also needs a `scan(prefix, limit)` method for the list to work.
+
 **Limits reset when I redeploy.**
 You are on memory storage. Use Redis.
 

@@ -16,6 +16,7 @@ type RedisLike = {
   get: (key: string) => Promise<string | null>;
   set: (key: string, value: string, mode: string, ttl: number) => Promise<string | null>;
   del: (key: string) => Promise<number>;
+  options?: { keyPrefix?: string };
   scan: (
     cursor: string,
     match: 'MATCH',
@@ -324,8 +325,9 @@ export class RedisStorage implements ShieldStorage {
   }
 
   async scan(prefix: string, limit: number): Promise<string[]> {
-    const offset = this.prefix ? this.prefix.length + 1 : 0;
-    const pattern = `${this.k(prefix).replace(/[\\*?[\]]/g, '\\$&')}*`;
+    const clientPrefix = this.client.options?.keyPrefix ?? '';
+    const offset = clientPrefix.length + (this.prefix ? this.prefix.length + 1 : 0);
+    const pattern = `${`${clientPrefix}${this.k(prefix)}`.replace(/[\\*?[\]]/g, '\\$&')}*`;
     const keys: string[] = [];
     let cursor = '0';
     do {

@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-10-27
+
+### Fixed
+
+- Bans created from the dashboard (and auto-bans) did not appear in the Bans list when your ioredis client was created with its own `keyPrefix` option. The ban was applied but could not be listed or unbanned from the panel. Listing now honours the client prefix.
+- IP addresses are stored in one canonical form (lowercase, compressed IPv6, IPv4-mapped addresses as IPv4), so a ban entered as `2A01:CB00:0001:0002:0000:0000:0000:0003` matches the same phone connecting as `2a01:cb00:1:2::3`.
+- Unbanning an address now also clears its violation counter and ban-escalation history, so a released address starts clean.
+
+### Added
+
+- The Overview tab now has an Active bans panel with an Unban button per address, and the Top clients list and Live traffic rows show Ban or Unban depending on the current state.
+
 ## [1.3.0] - 2026-10-26
 
 ### Added

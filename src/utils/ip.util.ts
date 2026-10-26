@@ -54,8 +54,11 @@ export class IpUtil {
 
   static normalize(addr: string): string {
     const trimmed = addr.trim();
-    if (trimmed.startsWith('::ffff:')) return trimmed.slice(7);
-    return trimmed;
+    try {
+      return ipaddr.process(trimmed).toString();
+    } catch {
+      return trimmed.startsWith('::ffff:') ? trimmed.slice(7) : trimmed;
+    }
   }
 
   static matches(ip: string, ips: string[] = [], cidrs: string[] = []): boolean {

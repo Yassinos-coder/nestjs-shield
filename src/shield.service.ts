@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { AutoBanCheck } from './checks/auto-ban.check';
-import { KEY_BAN, SHIELD_CONFIG, SHIELD_STORAGE } from './shield.constants';
+import { KEY_BAN, KEY_BAN_COUNT, KEY_VIOLATIONS, SHIELD_CONFIG, SHIELD_STORAGE } from './shield.constants';
 import type { AnyRequest, ShieldBanList, ShieldConfig } from './shield.types';
 import type { ShieldStorage } from './storage/shield-storage.interface';
 import { EventUtil } from './utils/event.util';
@@ -47,6 +47,8 @@ export class ShieldService {
 
   async unban(ip: string): Promise<void> {
     await this.storage.delete(`${KEY_BAN}:${ip}`);
+    await this.storage.delete(`${KEY_BAN_COUNT}:${ip}`);
+    await this.storage.delete(`${KEY_VIOLATIONS}:${ip}`);
     EventUtil.emit(this.config.onEvent, { type: 'unban', at: Date.now(), ip });
   }
 

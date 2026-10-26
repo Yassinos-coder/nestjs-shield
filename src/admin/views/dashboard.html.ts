@@ -31,6 +31,11 @@ export function renderDashboardPage(nonce: string): string {
     <div class="card kpi"><div class="lbl">Active bans</div><div class="val" id="kBans">0</div><div class="hint" id="kBansH">auto and manual</div></div>
   </div>
 
+  <div class="card mb">
+    <header><h2>Active bans</h2><span class="sub" id="banSubOv"></span></header>
+    <ul class="bans" id="bansOv"></ul>
+  </div>
+
   <div class="row2">
     <div class="card">
       <header><h2>Traffic, last 30 minutes</h2><div class="legend"><span><i class="lg-ok"></i>Allowed</span><span><i class="lg-bad"></i>Blocked</span></div></header>
@@ -112,7 +117,7 @@ export function renderDashboardPage(nonce: string): string {
     <button class="ghost" id="pause">Pause</button><button class="ghost" id="clear">Clear</button>
     <span class="tiny" id="liveState"></span>
   </div>
-  <div class="tablewrap"><table><thead><tr><th>Time</th><th>IP</th><th>Method</th><th>Path</th><th>Result</th><th>Layer</th><th>Status</th><th>ms</th><th>User-Agent</th></tr></thead><tbody id="rows"></tbody></table></div>
+  <div class="tablewrap"><table><thead><tr><th>Time</th><th>IP</th><th>Method</th><th>Path</th><th>Result</th><th>Layer</th><th>Status</th><th>ms</th><th>User-Agent</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
   <p class="tiny" id="emptyRows">Waiting for traffic...</p>
 </section>
 
@@ -124,7 +129,7 @@ const BASE=location.pathname.replace(/\\/$/,'');
 const NS='http://www.w3.org/2000/svg';
 const $=(id)=>document.getElementById(id);
 const MAX_ROWS=300;
-let rows=[],lastId=0,paused=false,filled=false,kind='all',lastStats=null;
+let rows=[],lastId=0,paused=false,filled=false,kind='all',lastStats=null,banned=new Set();
 
 try{const t=localStorage.getItem('shield-theme');if(t)document.documentElement.setAttribute('data-theme',t)}catch(e){}
 $('theme').addEventListener('click',()=>{
@@ -314,6 +319,18 @@ function donut(byClass){
   }
 }
 
+function banButton(ip){
+  const btn=document.createElement('button');btn.className='ghost sm';
+  if(banned.has(ip)){
+    btn.textContent='Unban';
+    btn.addEventListener('click',()=>run(()=>api('/api/bans/'+encodeURIComponent(ip),'DELETE'),'Unbanned '+ip,false).then(refreshBans));
+  }else{
+    btn.textContent='Ban';
+    btn.addEventListener('click',()=>{if(confirm('Ban '+ip+' for 60 minutes?'))run(()=>api('/api/bans','POST',{ip:ip,minutes:60}),'Banned '+ip,false).then(refreshBans)});
+  }
+  return btn;
+}
+function refreshBans(){return Promise.all([loadBans(),loadState()])}
 function topList(id,items,withBan){
   const box=$(id);box.textContent='';
   if(!items.length){const d=document.createElement('div');d.className='empty';d.textContent='No traffic yet';box.appendChild(d);return}
@@ -325,9 +342,7 @@ function topList(id,items,withBan){
     row.appendChild(k);row.appendChild(n);row.appendChild(r);
     if(withBan){
       row.style.gridTemplateColumns='minmax(0,1fr) auto auto auto';
-      const btn=document.createElement('button');btn.className='ghost sm';btn.textContent='Ban';
-      btn.addEventListener('click',()=>{if(confirm('Ban '+it.key+' for 60 minutes?'))run(()=>api('/api/bans','POST',{ip:it.key,minutes:60}),'Banned '+it.key,false).then(loadBans)});
-      row.appendChild(btn);
+      row.appendChild(banButton(it.key));
     }
     box.appendChild(row);
   }
@@ -364,6 +379,7 @@ function renderRows(freshFrom){
     const lt=cell(tr,'');if(e.layer)badge(lt,e.layer,'b-info');
     cell(tr,e.status||'',statusClass(e.status)+' mono');cell(tr,e.durationMs==null?'':e.durationMs,'mono');
     const ua=cell(tr,e.userAgent);ua.title=e.userAgent+(e.reason?' | '+e.reason:'');
+    cell(tr,'').appendChild(banButton(e.ip));
     body.appendChild(tr);
     if(++shown>=MAX_ROWS)break;
   }
@@ -383,25 +399,32 @@ async function pollEvents(){
     $('liveState').textContent='';
   }catch(e){$('liveState').textContent='connection problem'}
 }
+function fillBans(ul,j){
+  ul.textContent='';
+  const note=(text)=>{const li=document.createElement('li');li.textContent=text;ul.appendChild(li)};
+  if(!j.supported)return note('This storage cannot list bans.');
+  if(!j.bans.length)return note('No active bans');
+  for(const b of j.bans){
+    const li=document.createElement('li');
+    const left=document.createElement('div');
+    const label=document.createElement('span');label.className='mono';label.textContent=b.ip;
+    const sub=document.createElement('span');sub.className='sub';sub.textContent='until '+new Date(b.expiresAt).toLocaleString();
+    left.appendChild(label);left.appendChild(sub);
+    const btn=document.createElement('button');btn.className='ghost sm';btn.textContent='Unban';
+    btn.addEventListener('click',()=>run(()=>api('/api/bans/'+encodeURIComponent(b.ip),'DELETE'),'Unbanned '+b.ip,false).then(refreshBans));
+    li.appendChild(left);li.appendChild(btn);ul.appendChild(li);
+  }
+}
 async function loadBans(){
   try{
     const j=await api('/api/bans');if(!j)return;
-    const ul=$('bans');ul.textContent='';
+    banned=new Set(j.bans.map((b)=>b.ip));
     $('kBans').textContent=j.supported?fmt(j.bans.length):'n/a';
     $('kBansH').textContent=j.supported?(j.bans.length?'currently blocked':'none right now'):'storage cannot list bans';
-    $('banSub').textContent=j.supported&&j.bans.length?fmt(j.bans.length)+' active':'';
-    if(!j.supported){const li=document.createElement('li');li.textContent='This storage cannot list bans.';ul.appendChild(li);return}
-    if(!j.bans.length){const li=document.createElement('li');li.textContent='No active bans';ul.appendChild(li);return}
-    for(const b of j.bans){
-      const li=document.createElement('li');
-      const left=document.createElement('div');
-      const label=document.createElement('span');label.className='mono';label.textContent=b.ip;
-      const sub=document.createElement('span');sub.className='sub';sub.textContent='until '+new Date(b.expiresAt).toLocaleString();
-      left.appendChild(label);left.appendChild(sub);
-      const btn=document.createElement('button');btn.className='ghost sm';btn.textContent='Unban';
-      btn.addEventListener('click',()=>run(()=>api('/api/bans/'+encodeURIComponent(b.ip),'DELETE'),'Unbanned',false).then(loadBans));
-      li.appendChild(left);li.appendChild(btn);ul.appendChild(li);
-    }
+    const sub=j.supported&&j.bans.length?fmt(j.bans.length)+' active':'';
+    $('banSub').textContent=sub;$('banSubOv').textContent=sub;
+    fillBans($('bans'),j);fillBans($('bansOv'),j);
+    if(lastStats){topList('topIps',lastStats.topIps,true);renderRows()}
   }catch(e){toast(e.message,true)}
 }
 
@@ -418,7 +441,7 @@ $('abSave').addEventListener('click',()=>run(()=>{
   return api('/api/settings','PATCH',{autoBan:{threshold:Number($('abThreshold').value),window:Number($('abWindow').value)*1000,banDuration:Number($('abBan').value)*1000}});
 },'Auto-ban saved'));
 $('ipSave').addEventListener('click',()=>run(()=>api('/api/settings','PATCH',{whitelist:splitList('wl'),blacklist:splitList('bl')}),'IP rules saved'));
-$('banAdd').addEventListener('click',()=>run(()=>api('/api/bans','POST',{ip:$('banIp').value.trim(),minutes:Number($('banMin').value)}),'Banned',false).then(()=>{$('banIp').value='';loadBans()}));
+$('banAdd').addEventListener('click',()=>run(()=>api('/api/bans','POST',{ip:$('banIp').value.trim(),minutes:Number($('banMin').value)}),'Banned',false).then(()=>{$('banIp').value='';refreshBans()}));
 $('reset').addEventListener('click',()=>{if(confirm('Reset all dashboard overrides?'))run(()=>api('/api/settings','DELETE'),'Overrides reset')});
 $('logout').addEventListener('click',async()=>{try{await api('/logout','POST')}catch(e){}location.reload()});
 $('pause').addEventListener('click',()=>{paused=!paused;$('pause').textContent=paused?'Resume':'Pause';$('liveState').textContent=paused?'paused':''});
