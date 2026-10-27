@@ -10,6 +10,12 @@ export class AppModule {}
 
 That is a working setup: every route is rate limited, repeat abusers are banned for a while, and scanners hitting `/.env` or `/wp-login.php` are caught. Everything is tuned from environment variables.
 
+**Want it already wired into a full API?** Deploy the ready-made NestJS starter (API + Redis, with nestjs-shield, input sanitization and an `AGENTS.md` for AI coding agents) in one click:
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/nestjs-api-redis)
+
+Source: [nestjs-api-railway-template](https://github.com/Yassinos-coder/nestjs-api-railway-template)
+
 **On this page:** [Install](#install) · [Quick start](#quick-start) · [Behind a proxy](#behind-a-proxy-do-this-first) · [What it protects against](#what-it-protects-against) · [Configuration](#configuration) · [Recipes](#recipes) · [Admin dashboard](#admin-dashboard) · [Reference](#reference) · [Troubleshooting](#troubleshooting)
 
 ---
