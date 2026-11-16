@@ -1,5 +1,5 @@
 title: NestJS Shield
-description: Layered API protection for NestJS: rate limiting, IP rules, auto-ban, bot filtering, payload limits, and an admin dashboard.
+description: "Layered API protection for NestJS: rate limiting, IP rules, auto-ban, bot filtering, payload limits, and an admin dashboard."
 url: https://yassinos-coder.github.io
 baseurl: /nestjs-shield
 markdown: kramdown
