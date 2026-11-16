@@ -3,7 +3,10 @@ export class UaUtil {
     if (!ua) return false;
     for (const p of patterns) {
       if (p instanceof RegExp) {
-        if (p.test(ua)) return true;
+        p.lastIndex = 0;
+        const matched = p.test(ua);
+        p.lastIndex = 0;
+        if (matched) return true;
         continue;
       }
       if (ua.toLowerCase().includes(String(p).toLowerCase())) return true;

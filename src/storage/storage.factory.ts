@@ -10,27 +10,34 @@ type RedisConstructor = new (url: string, options?: Record<string, unknown>) => 
 
 export class StorageFactory {
   static build(config: ShieldConfig): ShieldStorage {
-    const main = StorageFactory.fromOption(config.storage);
+    const main = StorageFactory.fromOption(config.storage, config.onEvent);
     if (!config.banStorage) return main;
-    return new SplitBanStorage(main, StorageFactory.fromOption(config.banStorage));
+    return new SplitBanStorage(main, StorageFactory.fromOption(config.banStorage, config.onEvent));
   }
 
-  private static fromOption(option: StorageOption | undefined): ShieldStorage {
+  private static fromOption(
+    option: StorageOption | undefined,
+    onEvent: ShieldConfig['onEvent'],
+  ): ShieldStorage {
     if (!option || option === 'memory') return new MemoryStorage();
     if (typeof option === 'object' && 'type' in option) {
       if (option.type === 'memory') return new MemoryStorage({ maxKeys: option.maxKeys });
-      return StorageFactory.redis(option);
+      return StorageFactory.redis(option, onEvent);
     }
     return option as ShieldStorage;
   }
 
-  private static redis(option: RedisStorageOption): ShieldStorage {
+  private static redis(
+    option: RedisStorageOption,
+    onEvent: ShieldConfig['onEvent'],
+  ): ShieldStorage {
     const owned = option.client === undefined;
     const client = (owned ? StorageFactory.connect(option.url) : option.client) as RedisClient;
     const storage = new RedisStorage({ client, keyPrefix: option.keyPrefix });
     return new ResilientStorage(storage, {
       failOpen: option.failOpen !== false,
       onDispose: owned ? () => StorageFactory.quit(client) : undefined,
+      onEvent,
     });
   }
 

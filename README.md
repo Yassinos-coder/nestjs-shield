@@ -120,7 +120,7 @@ Every request passes these checks in this order. The first one that rejects ends
 | 2 | **Blacklist** | Blocks listed IPs and CIDR ranges | 403 |
 | 3 | **Auto-ban** | Temporarily bans clients that keep getting rejected; bans double on repeat offences | 403 + `Retry-After` |
 | 4 | **User-Agent** | Blocks, allows or requires user agents | 403 |
-| 5 | **Payload** | Caps body and header size | 413 |
+| 5 | **Payload** | Caps body and header size | 413 body / 431 headers |
 | 6 | **Burst** | Caps concurrent in-flight requests per IP (slowloris cover) | 429 |
 | 7 | **Rate limit** | Five algorithms, standard `RateLimit-*` headers | 429 + `Retry-After` |
 | 8 | **Slow-down** | Adds a growing delay as a client nears the limit | (delayed) |
@@ -130,6 +130,7 @@ Also built in:
 - **Scanner probes.** Hits on `/.env`, `/wp-login.php`, `/phpmyadmin` and similar count as violations even though no route exists for them, so scanners get auto-banned.
 - **Health checks are left alone.** `/health`, `/healthz`, `/livez`, `/readyz` and `/api/health` skip the shield by default.
 - **Redis can fail without taking you down.** If Redis is unreachable the shield keeps counting in memory and logs a warning, instead of failing requests.
+- **Storage health events.** `onEvent` reports when Redis fallback starts and when the primary storage recovers.
 - **Admin dashboard** with live traffic, charts, bans and editable limits.
 
 ---
@@ -213,7 +214,7 @@ ShieldModule.forRoot({
     payload413:   { message: 'Too large', code: 'TOO_LARGE' },
     onReject: (req, res, info) => {},  // { layer, ip, reason, status, retryAfterMs? }
   },
-  onEvent: (event) => {},             // reject, ban and unban events
+  onEvent: (event) => {},             // reject, ban, unban and storage health events
 
   admin: { attackModeFactor: 5, maxEvents: 500 },   // dashboard tuning
 });
@@ -330,11 +331,13 @@ ShieldModule.forRoot({
   onEvent: (event) => {
     if (event.type === 'reject') metrics.increment('shield.reject', { layer: event.layer });
     if (event.type === 'ban') audit.log(`banned ${event.ip} for ${event.durationMs}ms (${event.source})`);
+    if (event.type === 'storage-fallback') alerts.warn(`Shield storage fallback during ${event.operation}`);
+    if (event.type === 'storage-recovered') alerts.info('Shield storage recovered');
   },
 });
 ```
 
-Events: `reject` (`ip`, `layer`, `reason`, `status`, `method`, `path`), `ban` (`ip`, `durationMs`, `source`: `auto`, `manual` or `probe`) and `unban`. The hook can throw without affecting requests.
+Events: `reject` (`ip`, `layer`, `reason`, `status`, `method`, `path`), `ban` (`ip`, `durationMs`, `source`: `auto`, `manual` or `probe`), `unban`, `storage-fallback` (`operation`, `message`) and `storage-recovered`. Storage health events are emitted on state transitions, not per failed operation. The hook can throw without affecting requests.
 
 ### Use it with a global auth guard
 
@@ -469,6 +472,26 @@ Expected: the shield switched to in-memory counters for that period and recovers
 **Fastify.**
 The core guard works on any adapter, but `probes` and the dashboard cookie handling have only been verified on Express.
 
+### Request body size limits
+
+`payload.maxBodyBytes` checks `Content-Length`, raw body bytes when available, and the body available to the shield guard. Since Nest's body parser runs before guards, the guard check does not prevent the parser from buffering a chunked body first. To enforce a byte limit while parsing (including chunked requests), disable Nest's default parser and configure the Express parsers with the same limit:
+
+```ts
+import express from 'express';
+import { NestFactory } from '@nestjs/core';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+
+const maxBodyBytes = 1_000_000;
+const app = await NestFactory.create(AppModule, { bodyParser: false });
+const captureRawBody = (request: IncomingMessage, _response: ServerResponse, body: Buffer) => {
+  Object.assign(request, { rawBody: body });
+};
+app.use(express.json({ limit: maxBodyBytes, verify: captureRawBody }));
+app.use(express.urlencoded({ extended: true, limit: maxBodyBytes, verify: captureRawBody }));
+```
+
+Mount the parsers before the app starts listening. The parsers reject oversized bodies before they reach the guard, and `verify` preserves exact body bytes for the shield's route-level check.
+
 ---
 
 ## Example
@@ -477,12 +500,14 @@ A runnable end-to-end example is in [`example/`](example/README.md).
 
 ## Publishing (for maintainers)
 
-This repo publishes to two registries from one workflow (`.github/workflows/publish.yml`), on a published GitHub release, on `v*.*.*` tags, or by manual dispatch.
+This repo publishes to two registries from one workflow (`.github/workflows/publish.yml`). A package version change merged to `main` automatically tests and publishes to npm; published GitHub releases and `v*.*.*` tags publish to both registries. Manual dispatch can target either registry.
 
 | Registry | Name | Auth |
 | --- | --- | --- |
 | npm (public) | `nestjs-shield` | `NPM_TOKEN` repository secret (an automation token, so 2FA does not block CI) |
 | GitHub Packages | `@yassinos-coder/nestjs-shield` | automatic `GITHUB_TOKEN` |
+
+Add `NPM_TOKEN` under the repository's **Settings → Secrets and variables → Actions** before merging a version change. The workflow skips npm versions that are already published.
 
 To use the GitHub Packages build, map the scope in a project `.npmrc`:
 

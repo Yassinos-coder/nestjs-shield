@@ -13,6 +13,7 @@
     "build": "tsc -p tsconfig.build.json",
     "clean": "rimraf dist",
     "prebuild": "npm run clean",
+    "test": "npm run build && node --test",
     "prepublishOnly": "npm run build"
   },
   "keywords": [

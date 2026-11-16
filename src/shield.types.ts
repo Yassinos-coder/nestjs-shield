@@ -138,7 +138,9 @@ export interface RulesConfig {
 export type ShieldEvent =
   | { type: 'reject'; at: number; ip: string; layer: ShieldLayer; reason: string; status: number; method: string; path: string }
   | { type: 'ban'; at: number; ip: string; durationMs: number; source: 'auto' | 'manual' | 'probe' }
-  | { type: 'unban'; at: number; ip: string };
+  | { type: 'unban'; at: number; ip: string }
+  | { type: 'storage-fallback'; at: number; operation: string; message: string }
+  | { type: 'storage-recovered'; at: number };
 
 export interface ShieldConfig {
   /** Master switch. Defaults to true. */
@@ -188,7 +190,7 @@ export interface ShieldConfig {
   rules?: RulesConfig;
   /** Custom error messages and the reject hook. */
   response?: ResponseConfig;
-  /** Called for every reject and ban. Wrapped in try/catch, so it can never break a request. Use it for audit logs and metrics. */
+  /** Called for shield decisions and storage failover transitions. Wrapped in try/catch so it cannot break a request. */
   onEvent?: (event: ShieldEvent) => void;
   /** Admin dashboard tuning. The dashboard itself is switched on with `SHIELD_DASH=true`. */
   admin?: AdminOptions;
@@ -198,6 +200,7 @@ export type AnyRequest = {
   ip?: string;
   ips?: string[];
   headers: Record<string, string | string[] | undefined>;
+  rawBody?: Uint8Array;
   socket?: { remoteAddress?: string };
   connection?: { remoteAddress?: string };
   method?: string;

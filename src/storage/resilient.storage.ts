@@ -6,18 +6,22 @@ import type {
   TokenBucketResult,
   WindowResult,
 } from './shield-storage.interface';
+import type { ShieldEvent } from '../shield.types';
+import { EventUtil } from '../utils/event.util';
 
 const WARN_EVERY_MS = 30_000;
 
 export interface ResilientStorageOptions {
   failOpen: boolean;
   onDispose?: () => Promise<void>;
+  onEvent?: (event: ShieldEvent) => void;
 }
 
 export class ResilientStorage implements ShieldStorage {
   private readonly logger = new Logger('ShieldStorage');
   private readonly fallback = new MemoryStorage();
   private lastWarning = 0;
+  private usingFallback = false;
 
   constructor(
     private readonly primary: ShieldStorage,
@@ -25,51 +29,55 @@ export class ResilientStorage implements ShieldStorage {
   ) {}
 
   increment(key: string, ttlMs: number, by?: number): Promise<CounterResult> {
-    return this.guard((s) => s.increment(key, ttlMs, by));
+    return this.guard('increment', (s) => s.increment(key, ttlMs, by));
   }
 
   consumeToken(key: string, capacity: number, refillPerMs: number, cost?: number): Promise<TokenBucketResult> {
-    return this.guard((s) => s.consumeToken(key, capacity, refillPerMs, cost));
+    return this.guard('consumeToken', (s) => s.consumeToken(key, capacity, refillPerMs, cost));
   }
 
   fixedWindow(key: string, ttlMs: number, limit: number): Promise<WindowResult> {
-    return this.guard((s) => s.fixedWindow(key, ttlMs, limit));
+    return this.guard('fixedWindow', (s) => s.fixedWindow(key, ttlMs, limit));
   }
 
   slidingWindowCounter(key: string, ttlMs: number, limit: number): Promise<WindowResult> {
-    return this.guard((s) => s.slidingWindowCounter(key, ttlMs, limit));
+    return this.guard('slidingWindowCounter', (s) => s.slidingWindowCounter(key, ttlMs, limit));
   }
 
   slidingWindowLog(key: string, ttlMs: number, limit: number, now?: number): Promise<WindowResult> {
-    return this.guard((s) => s.slidingWindowLog(key, ttlMs, limit, now));
+    return this.guard('slidingWindowLog', (s) => s.slidingWindowLog(key, ttlMs, limit, now));
   }
 
   leakyBucket(key: string, capacity: number, leakPerMs: number): Promise<TokenBucketResult> {
-    return this.guard((s) => s.leakyBucket(key, capacity, leakPerMs));
+    return this.guard('leakyBucket', (s) => s.leakyBucket(key, capacity, leakPerMs));
   }
 
   get(key: string): Promise<string | null> {
-    return this.guard((s) => s.get(key));
+    return this.guard('get', (s) => s.get(key));
   }
 
   set(key: string, value: string, ttlMs: number): Promise<void> {
-    return this.guard((s) => s.set(key, value, ttlMs));
+    return this.guard('set', (s) => s.set(key, value, ttlMs));
   }
 
   delete(key: string): Promise<void> {
-    return this.guard((s) => s.delete(key));
+    return this.guard('delete', (s) => s.delete(key));
   }
 
   scan(prefix: string, limit: number): Promise<string[]> {
-    return this.guard((s) => (s.scan ? s.scan(prefix, limit) : Promise.resolve([])));
+    return this.guard('scan', (s) => (s.scan ? s.scan(prefix, limit) : Promise.resolve([])));
   }
 
   incrementConcurrent(key: string): Promise<number> {
-    return this.guard((s) => s.incrementConcurrent(key));
+    return this.guard('incrementConcurrent', (s) => s.incrementConcurrent(key));
   }
 
   decrementConcurrent(key: string): Promise<number> {
-    return this.guard((s) => s.decrementConcurrent(key));
+    return this.guard('decrementConcurrent', (s) => s.decrementConcurrent(key));
+  }
+
+  refreshConcurrent(key: string, ttlMs: number): Promise<void> {
+    return this.guard('refreshConcurrent', (s) => s.refreshConcurrent?.(key, ttlMs) ?? Promise.resolve());
   }
 
   async dispose(): Promise<void> {
@@ -78,12 +86,29 @@ export class ResilientStorage implements ShieldStorage {
     await this.options.onDispose?.();
   }
 
-  private async guard<T>(run: (storage: ShieldStorage) => Promise<T>): Promise<T> {
+  private async guard<T>(
+    operation: string,
+    run: (storage: ShieldStorage) => Promise<T>,
+  ): Promise<T> {
     try {
-      return await run(this.primary);
+      const value = await run(this.primary);
+      if (this.usingFallback) {
+        this.usingFallback = false;
+        EventUtil.emit(this.options.onEvent, { type: 'storage-recovered', at: Date.now() });
+      }
+      return value;
     } catch (error) {
       if (!this.options.failOpen) throw error;
       this.warn(error);
+      if (!this.usingFallback) {
+        this.usingFallback = true;
+        EventUtil.emit(this.options.onEvent, {
+          type: 'storage-fallback',
+          at: Date.now(),
+          operation,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
       return run(this.fallback);
     }
   }

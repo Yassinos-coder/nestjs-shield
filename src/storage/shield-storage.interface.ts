@@ -55,6 +55,7 @@ export interface ShieldStorage {
 
   incrementConcurrent(key: string): Promise<number>;
   decrementConcurrent(key: string): Promise<number>;
+  refreshConcurrent?(key: string, ttlMs: number): Promise<void>;
 
   dispose?(): Promise<void> | void;
 }

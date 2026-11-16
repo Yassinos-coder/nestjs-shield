@@ -193,6 +193,7 @@ export class ShieldEngine {
             message: config.response?.payload413?.message ?? pl.reason ?? 'Payload too large',
             code: config.response?.payload413?.code,
             layer: 'payload',
+            status: pl.status,
           }),
         };
       }
@@ -218,62 +219,66 @@ export class ShieldEngine {
     }
 
     try {
-    const rateLimit = this.mergeRateLimit(config, overrides);
-    let rateLimitTtl = 0;
-    if (!skipSet.has('rate-limit') && rateLimit) {
-      const rl = await RateLimitCheck.check(this.storage, req, ip, rateLimit);
-      rateLimitTtl = rateLimit.ttl;
-      if (rateLimit.headers !== false) {
-        HeadersUtil.writeRateLimit(
-          res,
-          rateLimit.standardHeaders ?? 'draft-7',
-          rl.limit,
-          rl.remaining,
-          rl.resetMs,
-        );
-      }
-      if (!rl.allowed) {
-        if (config.response?.rateLimit429?.includeRetryAfter !== false && rl.retryAfterMs) {
-          HeadersUtil.writeRetryAfter(res, rl.retryAfterMs);
+      const rateLimit = this.mergeRateLimit(config, overrides);
+      let rateLimitTtl = 0;
+      if (!skipSet.has('rate-limit') && rateLimit) {
+        const rl = await RateLimitCheck.check(this.storage, req, ip, rateLimit);
+        rateLimitTtl = rateLimit.ttl;
+        if (rateLimit.headers !== false) {
+          HeadersUtil.writeRateLimit(
+            res,
+            rateLimit.standardHeaders ?? 'draft-7',
+            rl.limit,
+            rl.remaining,
+            rl.resetMs,
+          );
         }
-        await this.recordViolation(ip, config);
-        if (release) await release();
-        this.notifyReject(req, res, ip, 'rate-limit', rl.reason ?? 'rate limited', 429, rl.retryAfterMs);
-        return {
-          allowed: false,
+        if (!rl.allowed) {
+          if (config.response?.rateLimit429?.includeRetryAfter !== false && rl.retryAfterMs) {
+            HeadersUtil.writeRetryAfter(res, rl.retryAfterMs);
+          }
+          await this.recordViolation(ip, config);
+          if (release) await this.releaseBurst(release);
+          this.notifyReject(req, res, ip, 'rate-limit', rl.reason ?? 'rate limited', 429, rl.retryAfterMs);
+          return {
+            allowed: false,
+            ip,
+            exception: new ShieldRateLimitException({
+              message: config.response?.rateLimit429?.message ?? rl.reason ?? 'Too many requests',
+              code: config.response?.rateLimit429?.code,
+              layer: 'rate-limit',
+              retryAfter: rl.retryAfterMs ? Math.ceil(rl.retryAfterMs / 1000) : undefined,
+            }),
+          };
+        }
+      }
+
+      let delayMs: number | undefined;
+      const slowDown = (overrides.slowDown ?? config.slowDown) as ShieldConfig['slowDown'];
+      if (!skipSet.has('slow-down') && slowDown) {
+        const sd = await SlowDownCheck.check(
+          this.storage,
           ip,
-          exception: new ShieldRateLimitException({
-            message: config.response?.rateLimit429?.message ?? rl.reason ?? 'Too many requests',
-            code: config.response?.rateLimit429?.code,
-            layer: 'rate-limit',
-            retryAfter: rl.retryAfterMs ? Math.ceil(rl.retryAfterMs / 1000) : undefined,
-          }),
-        };
+          rateLimitTtl || 60_000,
+          slowDown,
+        );
+        if (sd.delayMs && sd.delayMs > 0) delayMs = sd.delayMs;
       }
-    }
 
-    let delayMs: number | undefined;
-    const slowDown = (overrides.slowDown ?? config.slowDown) as ShieldConfig['slowDown'];
-    if (!skipSet.has('slow-down') && slowDown) {
-      const sd = await SlowDownCheck.check(
-        this.storage,
-        ip,
-        rateLimitTtl || 60_000,
-        slowDown,
-      );
-      if (sd.delayMs && sd.delayMs > 0) delayMs = sd.delayMs;
-    }
-
-    return { allowed: true, ip, delayMs, release };
+      return { allowed: true, ip, delayMs, release };
     } catch (err) {
-      if (release) {
-        try {
-          await release();
-        } catch {
-          // release failure is non-fatal; original error must still propagate
-        }
-      }
+      if (release) await this.releaseBurst(release);
       throw err;
+    }
+  }
+
+  private async releaseBurst(release: () => Promise<void> | void): Promise<void> {
+    try {
+      await release();
+    } catch (error) {
+      this.logger.warn(
+        `Could not release burst slot: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
