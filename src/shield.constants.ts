@@ -23,6 +23,8 @@ export const DEFAULT_SKIP_PATHS = ['/health', '/healthz', '/livez', '/readyz', '
 
 export const DEFAULT_MEMORY_MAX_KEYS = 100_000;
 export const DEFAULT_HEADERS_STANDARD = 'draft-7' as const;
+export const BURST_LEASE_TTL_MS = 60_000;
+export const BURST_LEASE_REFRESH_MS = 20_000;
 
 export type ShieldLayer =
   | 'whitelist'

@@ -4,6 +4,7 @@ import type {
   TokenBucketResult,
   WindowResult,
 } from './shield-storage.interface';
+import { BURST_LEASE_TTL_MS } from '../shield.constants';
 
 type RedisLike = {
   call: (...args: unknown[]) => Promise<unknown>;
@@ -343,7 +344,9 @@ export class RedisStorage implements ShieldStorage {
 
   async incrementConcurrent(key: string): Promise<number> {
     const k = this.k(`burst:${key}`);
-    const next = await this.runScript('shieldBurstIncrement', BURST_INCREMENT_LUA, [k], [60_000]);
+    const next = await this.runScript('shieldBurstIncrement', BURST_INCREMENT_LUA, [k], [
+      BURST_LEASE_TTL_MS,
+    ]);
     return Number(next);
   }
 
@@ -351,6 +354,10 @@ export class RedisStorage implements ShieldStorage {
     const k = this.k(`burst:${key}`);
     const next = await this.runScript('shieldBurstDecrement', BURST_DECREMENT_LUA, [k], []);
     return Math.max(0, Number(next));
+  }
+
+  async refreshConcurrent(key: string, ttlMs: number): Promise<void> {
+    await this.client.pexpire(this.k(`burst:${key}`), ttlMs);
   }
 
   private k(key: string): string {

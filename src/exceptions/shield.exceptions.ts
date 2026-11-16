@@ -39,15 +39,16 @@ export class ShieldBlockedException extends HttpException {
 }
 
 export class ShieldPayloadException extends HttpException {
-  constructor(payload: Omit<ShieldExceptionPayload, 'code'> & { code?: string }) {
+  constructor(payload: Omit<ShieldExceptionPayload, 'code'> & { code?: string; status?: number }) {
+    const status = payload.status ?? HttpStatus.PAYLOAD_TOO_LARGE;
     super(
       {
-        statusCode: HttpStatus.PAYLOAD_TOO_LARGE,
+        statusCode: status,
         code: payload.code ?? 'SHIELD_PAYLOAD_TOO_LARGE',
         message: payload.message,
         layer: payload.layer,
       },
-      HttpStatus.PAYLOAD_TOO_LARGE,
+      status,
     );
   }
 }

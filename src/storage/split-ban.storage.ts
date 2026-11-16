@@ -7,10 +7,14 @@ import type {
 } from './shield-storage.interface';
 
 export class SplitBanStorage implements ShieldStorage {
+  readonly refreshConcurrent?: ShieldStorage['refreshConcurrent'];
+
   constructor(
     private readonly main: ShieldStorage,
     private readonly bans: ShieldStorage,
-  ) {}
+  ) {
+    this.refreshConcurrent = main.refreshConcurrent?.bind(main);
+  }
 
   increment(key: string, ttlMs: number, by?: number): Promise<CounterResult> {
     return this.storageFor(key).increment(key, ttlMs, by);
