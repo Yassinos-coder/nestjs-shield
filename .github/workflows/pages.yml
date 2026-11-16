@@ -1,0 +1,73 @@
+name: Deploy documentation site
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - README.md
+      - CONTRIBUTING.md
+      - docs/**
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Prepare generated documentation
+        run: |
+          mkdir -p docs/_includes
+          cp README.md docs/_includes/package-readme.md
+          cp CONTRIBUTING.md docs/_includes/contributing.md
+          {
+            printf '# nestjs-shield documentation\n\n'
+            cat README.md
+            printf '\n\n'
+            cat CONTRIBUTING.md
+          } > docs/llms-full.txt
+          updated="$(date -u +%F)"
+          cat > docs/sitemap.xml <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+            <url>
+              <loc>https://yassinos-coder.github.io/nestjs-shield/</loc>
+              <lastmod>${updated}</lastmod>
+              <changefreq>weekly</changefreq>
+              <priority>1.0</priority>
+            </url>
+          </urlset>
+          EOF
+
+      - name: Build site
+        uses: actions/jekyll-build-pages@v1
+        with:
+          source: ./docs
+          destination: ./_site
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./_site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

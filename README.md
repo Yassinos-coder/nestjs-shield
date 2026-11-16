@@ -2,6 +2,8 @@
 
 **Protect your NestJS API in one module.** Rate limiting, automatic bans, IP lists, bot and scanner blocking, and a built-in admin dashboard, with no extra services required.
 
+[Documentation website](https://yassinos-coder.github.io/nestjs-shield/) · [Contributing](https://github.com/Yassinos-coder/nestjs-shield/blob/main/CONTRIBUTING.md) · [npm](https://www.npmjs.com/package/nestjs-shield)
+
 ```ts
 // app.module.ts
 @Module({ imports: [ShieldModule.forEnv()] })
@@ -16,7 +18,7 @@ That is a working setup: every route is rate limited, repeat abusers are banned 
 
 Source: [nestjs-api-railway-template](https://github.com/Yassinos-coder/nestjs-api-railway-template)
 
-**On this page:** [Install](#install) · [Quick start](#quick-start) · [Behind a proxy](#behind-a-proxy-do-this-first) · [What it protects against](#what-it-protects-against) · [Configuration](#configuration) · [Recipes](#recipes) · [Admin dashboard](#admin-dashboard) · [Reference](#reference) · [Troubleshooting](#troubleshooting)
+**On this page:** [Install](#install) · [Quick start](#quick-start) · [Behind a proxy](#behind-a-proxy-do-this-first) · [What it protects against](#what-it-protects-against) · [Configuration](#configuration) · [Recipes](#recipes) · [Admin dashboard](#admin-dashboard) · [Reference](#reference) · [Troubleshooting](#troubleshooting) · [Contributing](#contributing)
 
 ---
 
@@ -496,7 +498,11 @@ Mount the parsers before the app starts listening. The parsers reject oversized 
 
 ## Example
 
-A runnable end-to-end example is in [`example/`](example/README.md).
+A runnable end-to-end example is in the [example project](https://github.com/Yassinos-coder/nestjs-shield/blob/main/example/README.md).
+
+## Contributing
+
+Bug reports, documentation fixes, and focused pull requests are welcome. Read the [contribution guide](https://github.com/Yassinos-coder/nestjs-shield/blob/main/CONTRIBUTING.md) for development setup, tests, and pull request expectations.
 
 ## Publishing (for maintainers)
 

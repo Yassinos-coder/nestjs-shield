@@ -1,0 +1,17 @@
+# NestJS Shield
+
+> nestjs-shield is an open-source NestJS package for layered API protection: rate limiting, IP allow/block lists, automatic bans, user-agent rules, payload limits, burst limits, slow-down, scanner probes, Redis-backed storage, and an optional admin dashboard.
+
+## Documentation
+- [Installation, quick start, configuration, recipes, reference, and troubleshooting](https://yassinos-coder.github.io/nestjs-shield/)
+- [Full repository README](https://github.com/Yassinos-coder/nestjs-shield/blob/main/README.md)
+- [Contribution guide](https://github.com/Yassinos-coder/nestjs-shield/blob/main/CONTRIBUTING.md)
+
+## Project links
+- [Source repository](https://github.com/Yassinos-coder/nestjs-shield)
+- [npm package](https://www.npmjs.com/package/nestjs-shield)
+- [Issues and feature requests](https://github.com/Yassinos-coder/nestjs-shield/issues)
+- [Ready-to-deploy Railway starter](https://railway.com/deploy/nestjs-api-redis)
+- [MIT license](https://github.com/Yassinos-coder/nestjs-shield/blob/main/LICENSE)
+
+The package supports Node.js 18+ and NestJS 9–12 on the Express adapter. NestJS 12 requires Node.js 20+. Redis storage is optional and requires installing `ioredis`.
